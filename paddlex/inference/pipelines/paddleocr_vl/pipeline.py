@@ -16,6 +16,7 @@ import queue
 import re
 import threading
 import time
+from contextlib import nullcontext
 from itertools import chain
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -81,6 +82,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         super().__init__(
             device=device, pp_option=pp_option, use_hpip=use_hpip, hpi_config=hpi_config
         )
+        self._gpu_inference_lock = threading.Lock()
 
         if initial_predictor:
             self.use_doc_preprocessor = config.get("use_doc_preprocessor", True)
@@ -259,6 +261,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
         vlm_kwargs=None,
         merge_layout_blocks=True,
         layout_shape_mode="auto",
+        gpu_lock=None,
     ):
         blocks = []
         has_spotting = False
@@ -381,19 +384,20 @@ class _PaddleOCRVLPipeline(BasePipeline):
             }
             images = batch_dict_by_pixel[pixel_key]["images"]
             queries = batch_dict_by_pixel[pixel_key]["queries"]
-            batch_results = list(
-                self.vl_rec_model.predict(
-                    [
-                        {
-                            "image": image,
-                            "query": query,
-                        }
-                        for image, query in zip(images, queries)
-                    ],
-                    skip_special_tokens=False if has_spotting else True,
-                    **kwargs,
+            with gpu_lock if gpu_lock is not None else nullcontext():
+                batch_results = list(
+                    self.vl_rec_model.predict(
+                        [
+                            {
+                                "image": image,
+                                "query": query,
+                            }
+                            for image, query in zip(images, queries)
+                        ],
+                        skip_special_tokens=False if has_spotting else True,
+                        **kwargs,
+                    )
                 )
-            )
             del images, queries
             batch_dict_by_pixel[pixel_key]["vlm_results"] = batch_results
 
@@ -625,13 +629,14 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 image_arrays = self.img_reader(instances)
 
                 if model_settings["use_doc_preprocessor"]:
-                    doc_preprocessor_results = list(
-                        self.doc_preprocessor_pipeline(
-                            image_arrays,
-                            use_doc_orientation_classify=use_doc_orientation_classify,
-                            use_doc_unwarping=use_doc_unwarping,
+                    with self._gpu_inference_lock:
+                        doc_preprocessor_results = list(
+                            self.doc_preprocessor_pipeline(
+                                image_arrays,
+                                use_doc_orientation_classify=use_doc_orientation_classify,
+                                use_doc_unwarping=use_doc_unwarping,
+                            )
                         )
-                    )
                 else:
                     doc_preprocessor_results = [
                         {"output_img": arr} for arr in image_arrays
@@ -641,17 +646,18 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     item["output_img"] for item in doc_preprocessor_results
                 ]
                 if model_settings["use_layout_detection"]:
-                    layout_det_results = list(
-                        self.layout_det_model(
-                            doc_preprocessor_images,
-                            threshold=layout_threshold,
-                            layout_nms=layout_nms,
-                            layout_unclip_ratio=layout_unclip_ratio,
-                            layout_merge_bboxes_mode=layout_merge_bboxes_mode,
-                            layout_shape_mode=layout_shape_mode,
-                            filter_overlap_boxes=False,
+                    with self._gpu_inference_lock:
+                        layout_det_results = list(
+                            self.layout_det_model(
+                                doc_preprocessor_images,
+                                threshold=layout_threshold,
+                                layout_nms=layout_nms,
+                                layout_unclip_ratio=layout_unclip_ratio,
+                                layout_merge_bboxes_mode=layout_merge_bboxes_mode,
+                                layout_shape_mode=layout_shape_mode,
+                                filter_overlap_boxes=False,
+                            )
                         )
-                    )
 
                     imgs_in_doc = [
                         gather_imgs(doc_pp_img, layout_det_res["boxes"])
@@ -719,6 +725,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                 },
                 merge_layout_blocks=model_settings["merge_layout_blocks"],
                 layout_shape_mode=layout_shape_mode,
+                gpu_lock=self._gpu_inference_lock,
             )
 
             for (
