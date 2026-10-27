@@ -603,6 +603,7 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
             hidden_states: torch.Tensor,
             cu_seqlens: Optional[List[torch.Tensor]] = None,
             rope_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            max_seqlen: Optional[int] = None,
         ) -> torch.Tensor:
             batch_size, seq_length, embed_dim = hidden_states.shape
 
@@ -621,7 +622,8 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                 from flash_attn import flash_attn_varlen_func
 
                 q, k, v = (rearrange(x, "b s ... -> (b s) ...") for x in [q, k, v])
-                max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+                if max_seqlen is None:
+                    max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
                 output = flash_attn_varlen_func(
                     q,
                     k,
@@ -765,6 +767,7 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
             hidden_states: torch.Tensor,
             cu_seqlens: Optional[List[torch.Tensor]] = None,
             rope_emb: Optional[Tuple[torch.Tensor, torch.Tensor]] = None,
+            max_seqlen: Optional[int] = None,
         ) -> Tuple[torch.FloatTensor]:
 
             residual = hidden_states
@@ -774,6 +777,7 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                 hidden_states=hidden_states,
                 cu_seqlens=cu_seqlens,
                 rope_emb=rope_emb,
+                max_seqlen=max_seqlen,
             )
 
             hidden_states = residual + hidden_states
@@ -852,18 +856,25 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                     split_wids.append(sample_wids)
                 width_position_ids = torch.concat(split_wids, dim=0)
                 height_position_ids = torch.concat(split_hids, dim=0)
+                # These dimensions are already known on the host. No GPU
+                # reduction or scalar read is needed to size the RoPE table.
+                max_grid_size = max(max(h, w) for _, h, w in flatten_image_grid_thw)
+            else:
+                max_grid_size = None
 
             pids = torch.stack(
                 [height_position_ids, width_position_ids],
                 dim=-1,
             )
-            max_grid_size = pids.max() + 1
+            if max_grid_size is None:
+                max_grid_size = pids.max() + 1
             rope_emb_max_grid = self.rotary_pos_emb(max_grid_size)
             rope_emb = rope_emb_max_grid[pids].flatten(1)
             rope_emb = rope_emb.repeat(1, 2)
             rope_emb = (rope_emb.cos(), rope_emb.sin())
 
             attn_cu_seqlens = cu_seqlens
+            max_seqlen = max(t * h * w for t, h, w in flatten_image_grid_thw)
             hidden_states = inputs_embeds
 
             for encoder_layer in self.layers:
@@ -871,6 +882,7 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                     hidden_states,
                     cu_seqlens=attn_cu_seqlens,
                     rope_emb=rope_emb,
+                    max_seqlen=max_seqlen,
                 )
             return hidden_states
 
@@ -935,11 +947,12 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                     "cu_seqlens cannot be None for "
                     "SiglipVisionTransformer output processing."
                 )
-            for i in range(cu_seqlens.shape[0] - 1):
-                start = cu_seqlens[i]
-                end = cu_seqlens[i + 1]
+            start = 0
+            for t, h, w in self.encoder.flatten_list(image_grid_thw):
+                end = start + t * h * w
                 tensor = last_hidden_state[:, start:end, :].squeeze(0)
                 sample_hidden_state.append(tensor)
+                start = end
 
             return sample_hidden_state
 
@@ -1162,7 +1175,7 @@ if all(map(is_dep_available, ("einops", "torch", "transformers", "vllm"))):
                 interpolate_pos_encoding=True,
                 cu_seqlens=cu_seqlens,
             )
-            image_embeds = self.mlp_AR(vision_outputs, image_grid_thw)
+            image_embeds = self.mlp_AR(vision_outputs, image_grid_hws)
 
             return image_embeds
 
