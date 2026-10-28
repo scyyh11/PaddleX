@@ -16,7 +16,9 @@ import base64
 import copy
 import io
 import os
+import re
 import warnings
+from concurrent.futures import Future
 from pathlib import Path
 from typing import List, Optional
 
@@ -432,8 +434,17 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
         top_p: Optional[float] = None,
         min_pixels: Optional[int] = None,
         max_pixels: Optional[int] = None,
+        repeat_retry: int = 0,
         **kwargs,
     ):
+        """Optionally retry length-limited formula spacing loops after draining.
+
+        ``repeat_retry`` is opt-in (0, 1 or 2). Retries use the original request
+        unchanged. This recovers some batch-sensitive model degenerations;
+        it neither truncates output nor fixes the underlying recognition model.
+        """
+        if not isinstance(repeat_retry, int) or not 0 <= repeat_retry <= 2:
+            raise ValueError("`repeat_retry` must be 0, 1 or 2.")
         require_genai_client_plugin()
         preds = self._genai_client_process(
             data,
@@ -444,6 +455,7 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
             top_p=top_p,
             min_pixels=min_pixels,
             max_pixels=max_pixels,
+            repeat_retry=repeat_retry,
         )
         return format_doc_vlm_result_dict(preds, data, add_input_path=True)
 
@@ -579,6 +591,58 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
             results.append(result.choices[0].message.content)
         return results
 
+    @staticmethod
+    def _doc_vlm_genai_is_spacing_loop(response, query):
+        if query != "Formula Recognition:":
+            return False
+        choice = response.choices[0]
+        if choice.finish_reason != "length" or not choice.message.content:
+            return False
+        # Only the observed pathological LaTeX spacing cycle is recognized.
+        # Healthy EOS responses and repetitive table/text content pass through.
+        return re.search(
+            r"(?:\\(?:quad|qquad)\s*){64,}\\?$",
+            choice.message.content[-2048:],
+        ) is not None
+
+    def _doc_vlm_genai_recover_repetitions(self, client, specs, futures, retries):
+        # Resolve every initial request before issuing any retry. This drains
+        # this predictor's batch; unrelated server users can still be active.
+        responses = [future.result() for future in futures]
+        for index, ((messages, request_kwargs), response) in enumerate(
+            zip(specs, responses)
+        ):
+            query = messages[0]["content"][-1]["text"]
+            if not self._doc_vlm_genai_is_spacing_loop(response, query):
+                continue
+            event = {"index": index, "attempts": []}
+            self._doc_vlm_genai_recovery_stats.append(event)
+            for attempt in range(retries + 1):
+                event["attempts"].append({
+                    "finish_reason": response.choices[0].finish_reason,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "prompt_tokens": response.usage.prompt_tokens,
+                })
+                if not self._doc_vlm_genai_is_spacing_loop(response, query):
+                    replacement = Future()
+                    replacement.set_result(response)
+                    futures[index] = replacement
+                    event["recovered"] = True
+                    break
+                if attempt == retries:
+                    event["recovered"] = False
+                    raise RuntimeError(
+                        f"Formula spacing loop at batch index {index} persisted "
+                        f"after {retries} unchanged-request retries."
+                    )
+                logging.warning(
+                    f"Retrying formula spacing loop at batch index {index} "
+                    f"after batch drain (attempt {attempt + 1}/{retries})."
+                )
+                response = client.create_chat_completion(
+                    messages, timeout=600, **request_kwargs
+                )
+
     def _genai_client_process(
         self,
         data,
@@ -589,9 +653,11 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
         top_p,
         min_pixels,
         max_pixels,
+        repeat_retry=0,
     ):
         client = self.genai_client
         futures = []
+        self._doc_vlm_genai_recovery_stats = []
         image_format = "PNG" if client.backend == "llama-cpp-server" else "JPEG"
         try:
             specs = self._doc_vlm_genai_build_request_specs(
@@ -614,6 +680,10 @@ class DocVLMGenAIClientPredictor(GenAIClientPredictor):
                     **request_kwargs,
                 )
                 futures.append(future)
+            if repeat_retry:
+                self._doc_vlm_genai_recover_repetitions(
+                    client, specs, futures, repeat_retry
+                )
             return self._doc_vlm_genai_collect_responses(futures)
         except Exception:
             # Cancel all pending futures to avoid wasting resources
