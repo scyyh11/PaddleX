@@ -11,12 +11,19 @@ permissions:
 
 jobs:
   check:
-    name: Python ${{ matrix.python-version }}
+    name: Python ${{ matrix.python-version }} / NumPy ${{ matrix.numpy-version }}
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.9", "3.13"]
+        include:
+          - python-version: "3.9"
+            numpy-version: "2.0.2"
+          - python-version: "3.12"
+            numpy-version: "1.26.4"
+          - python-version: "3.13"
+            numpy-version: "2.3.5"
     steps:
       - uses: actions/checkout@v6
         with:
@@ -25,14 +32,19 @@ jobs:
         with:
           python-version: ${{ matrix.python-version }}
       - name: Build and install the wheel
+        env:
+          NUMPY_VERSION: ${{ matrix.numpy-version }}
         run: |
           python -m pip install build
           python -m build --wheel
           wheels=(dist/*.whl)
-          python -m pip install "${wheels[0]}[ocr-core]"
+          python -m pip install "${wheels[0]}[ocr-core]" "numpy==${NUMPY_VERSION}" "paddlepaddle==3.3.1"
       - name: Check the installed package
         working-directory: ${{ runner.temp }}
+        env:
+          PADDLE_PDX_MODEL_SOURCE: bos
+          PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK: "True"
         run: |
           python -m pip check
-          python -c "from paddlex import create_pipeline"
           paddlex --help
+          python "$GITHUB_WORKSPACE/tests/ocr_numpy_smoke.py"
