@@ -1,0 +1,15 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "l20-paddleocr-vl"
+version = "0.1.0"
+description = "Port of PaddleX #5229 batched vision encoding and host shape metadata to upstream vLLM PaddleOCR-VL"
+requires-python = ">=3.10"
+
+[project.entry-points."vllm.general_plugins"]
+l20_paddleocr_vl = "l20_paddleocr_vl:register"
+
+[tool.setuptools]
+packages = ["l20_paddleocr_vl"]

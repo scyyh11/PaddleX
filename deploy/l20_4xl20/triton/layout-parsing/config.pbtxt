@@ -1,0 +1,27 @@
+backend: "python"
+max_batch_size: 2
+input [
+  {
+    name: "input"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+  }
+]
+output [
+  {
+    name: "output"
+    data_type: TYPE_STRING
+    dims: [ -1 ]
+  }
+]
+instance_group [
+  {
+      count: 10
+      kind: KIND_GPU
+      gpus: [ 0 ]
+  }
+]
+dynamic_batching {
+  preferred_batch_size: [ 2 ]
+  max_queue_delay_microseconds: 20000
+}
