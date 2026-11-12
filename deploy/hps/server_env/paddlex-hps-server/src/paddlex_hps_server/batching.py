@@ -12,6 +12,13 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from paddlex.inference.serving.infra.utils import (
+    PipelineOutputError,
+    collect_pipeline_predictions,
+)
+
+from . import protocol
+
 
 def _freeze(value):
     if isinstance(value, dict):
@@ -27,3 +34,14 @@ def group_request_indices(inference_kwargs):
     for index, kwargs in enumerate(inference_kwargs):
         groups.setdefault(_freeze(kwargs), []).append(index)
     return list(groups.values())
+
+
+def predict_request_group(pipeline, images, inference_kwargs, log_ids):
+    """Run a group and return per-request responses for a pipeline-reported error."""
+    try:
+        return collect_pipeline_predictions(pipeline(images, **inference_kwargs)), None
+    except PipelineOutputError as exc:
+        return [], [
+            protocol.create_aistudio_output_without_result(500, str(exc), log_id=log_id)
+            for log_id in log_ids
+        ]

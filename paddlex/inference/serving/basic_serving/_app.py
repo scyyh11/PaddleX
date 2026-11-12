@@ -40,6 +40,7 @@ from ....utils.flags import SERVING_SERIAL_PIPELINE_CALLS
 from ...pipelines import BasePipeline
 from ..infra.config import AppConfig
 from ..infra.models import AIStudioNoResultResponse
+from ..infra.storage import InvalidStoragePathError
 from ..infra.utils import (
     PipelineOutputError,
     call_async,
@@ -260,6 +261,14 @@ def create_app(
             )
         )
         return JSONResponse(content=json_compatible_data, status_code=exc.status_code)
+
+    @app.exception_handler(InvalidStoragePathError)
+    async def _storage_path_exception_handler(
+        request: fastapi.Request, exc: InvalidStoragePathError
+    ) -> JSONResponse:
+        return await _http_exception_handler(
+            request, HTTPException(status_code=422, detail=str(exc))
+        )
 
     @app.exception_handler(Exception)
     async def _unexpected_exception_handler(

@@ -16,6 +16,7 @@
 
 import base64
 import importlib.util
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -32,6 +33,11 @@ from paddlex.inference.serving.app_shared.document_export import postprocess_doc
 from paddlex.inference.serving.app_shared.image_output import postprocess_image
 from paddlex.inference.serving.app_shared.ocr_input import create_ocr_context
 from paddlex.inference.serving.infra.config import AppConfig
+from paddlex.inference.serving.infra.storage import (
+    FileSystemStorage,
+    FileSystemStorageConfig,
+    InvalidStoragePathError,
+)
 from paddlex.inference.serving.infra.utils import (
     image_array_to_bytes,
     image_bytes_to_image,
@@ -82,7 +88,10 @@ class Pipeline:
 
     def predict(self, images, **kwargs):
         self.inference_calls.append((len(images), kwargs))
-        if kwargs.get("layout_deform_min_roll") == 99:
+        if (
+            kwargs.get("layout_deform_min_roll") == 99
+            or kwargs.get("text_det_limit_side_len") == 99
+        ):
             yield {"error": "Invalid model settings"}
             raise AssertionError("The serving adapter must stop after a pipeline error")
         for image in images:
@@ -392,15 +401,107 @@ def test_other_hps_models_group_by_effective_inference_arguments(
     request_type = model.get_input_model_type()
     requests = [
         request_type(file=file_payload, fileType=1, textDetLimitSideLen=size)
-        for size in (64, 128, 64)
+        for size in (99, 64, 128, 64)
     ]
-    results = model.run_batch(requests, ["a", "b", "c"], "batch")
+    error, *results = model.run_batch(requests, ["bad", "a", "b", "c"], "batch")
+    assert (error.errorCode, error.errorMsg, error.logId) == (
+        500,
+        "Invalid model settings",
+        "bad",
+    )
     assert [
         (count, kwargs["text_det_limit_side_len"])
         for count, kwargs in model.pipeline.inference_calls
-    ] == [(2, 64), (1, 128)]
+    ] == [(1, 99), (2, 64), (1, 128)]
     assert [preds[0].text for preds in results] == [
-        "prediction 1",
         "prediction 2",
-        "prediction 1",
+        "prediction 3",
+        "prediction 2",
     ]
+
+
+def test_file_storage_writes_markdown_images_in_nested_directories(
+    basic_client, file_payload, tmp_path
+):
+    client, _ = basic_client
+    storage = FileSystemStorage(FileSystemStorageConfig(directory=tmp_path))
+    client.app.state.context.extra["file_storage"] = storage
+    payload = {
+        "file": file_payload,
+        "fileType": 1,
+        "returnMarkdownImages": True,
+        "visualize": False,
+        "outputFormats": ["docx"],
+    }
+
+    rejected = client.post("/layout-parsing", json={**payload, "logId": "two/parts"})
+    assert rejected.status_code == 422
+    assert list(tmp_path.iterdir()) == []
+
+    response = client.post("/layout-parsing", json={**payload, "logId": "single-id"})
+    assert response.status_code == 200
+    (page,) = response.json()["result"]["layoutParsingResults"]
+    assert storage.get("single-id/markdown_0/page.png") == base64.b64decode(
+        page["markdown"]["images"]["page.png"]
+    )
+    assert storage.get("single-id/page.docx") == b"prediction 2"
+
+
+def test_filesystem_storage_rejects_a_path_outside_its_root(tmp_path):
+    root = tmp_path / "storage"
+    storage = FileSystemStorage(FileSystemStorageConfig(directory=root))
+    sibling = tmp_path / "sibling"
+    sibling.mkdir()
+    (root / "link").symlink_to(sibling, target_is_directory=True)
+
+    with pytest.raises(InvalidStoragePathError):
+        storage.get("link/image.png")
+
+
+def test_hps_rejects_invalid_storage_log_id_without_failing_other_requests(
+    hps_model, file_payload, tmp_path, monkeypatch
+):
+    from paddlex_hps_server import base_model
+
+    model = hps_model("layout-parsing")
+    model._id = "test-model"
+    model.context["file_storage"] = FileSystemStorage(
+        FileSystemStorageConfig(directory=tmp_path)
+    )
+    monkeypatch.setattr(
+        base_model,
+        "pb_utils",
+        SimpleNamespace(
+            get_input_tensor_by_name=lambda request, name: SimpleNamespace(
+                as_numpy=lambda: request
+            ),
+            Tensor=lambda name, value: value,
+            InferenceResponse=lambda output_tensors: output_tensors[0],
+        ),
+    )
+    requests = [
+        np.array(
+            [
+                [
+                    json.dumps(
+                        {
+                            "file": file_payload,
+                            "fileType": 1,
+                            "logId": log_id,
+                            "visualize": False,
+                        }
+                    ).encode()
+                ]
+            ],
+            dtype=object,
+        )
+        for log_id in ("two/parts", "single-id")
+    ]
+
+    rejected, succeeded = [
+        json.loads(output[0, 0]) for output in model.execute(requests)
+    ]
+    assert rejected["errorCode"] == 422
+    assert succeeded["errorCode"] == 0
+    assert (tmp_path / "single-id/markdown_0/page.png").is_file()
+    assert {entry.name for entry in tmp_path.iterdir()} == {"single-id"}

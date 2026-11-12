@@ -25,7 +25,7 @@ from paddlex_hps_server import (
     schemas,
     utils,
 )
-from paddlex_hps_server.batching import group_request_indices
+from paddlex_hps_server.batching import group_request_indices, predict_request_group
 from paddlex_hps_server.storage import SupportsGetURL, create_storage
 
 _DEFAULT_MAX_NUM_INPUT_IMGS: Final[int] = 10
@@ -134,9 +134,15 @@ class TritonPythonModel(BaseTritonPythonModel):
 
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
-                    preds = list(
-                        self.pipeline(images, **inference_kwargs[input_ids_g[0]])
+                    preds, errors = predict_request_group(
+                        self.pipeline,
+                        images,
+                        inference_kwargs[input_ids_g[0]],
+                        ind_log_ids_lst,
                     )
+                    if errors is not None:
+                        result_or_output_dic.update(zip(ind_input_ids_lst, errors))
+                        continue
 
                     if len(preds) != len(images):
                         raise RuntimeError(

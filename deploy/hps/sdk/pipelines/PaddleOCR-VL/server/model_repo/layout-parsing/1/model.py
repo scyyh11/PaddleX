@@ -24,10 +24,6 @@ from paddlex.inference.serving.app_shared.paddleocr_vl import (
     build_infer_result,
     get_inference_kwargs,
 )
-from paddlex.inference.serving.infra.utils import (
-    PipelineOutputError,
-    collect_pipeline_predictions,
-)
 from paddlex_hps_server import (
     BaseTritonPythonModel,
     logging,
@@ -35,7 +31,7 @@ from paddlex_hps_server import (
     schemas,
     utils,
 )
-from paddlex_hps_server.batching import group_request_indices
+from paddlex_hps_server.batching import group_request_indices, predict_request_group
 
 
 class _SequentialExecutor(object):
@@ -99,17 +95,14 @@ class TritonPythonModel(BaseTritonPythonModel):
 
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
-                    try:
-                        preds = collect_pipeline_predictions(
-                            self.pipeline(images, **inference_kwargs[input_ids_g[0]])
-                        )
-                    except PipelineOutputError as exc:
-                        for input_id, log_id in zip(ind_input_id_lst, ind_log_id_lst):
-                            result_or_output_dic[input_id] = (
-                                protocol.create_aistudio_output_without_result(
-                                    500, str(exc), log_id=log_id
-                                )
-                            )
+                    preds, errors = predict_request_group(
+                        self.pipeline,
+                        images,
+                        inference_kwargs[input_ids_g[0]],
+                        ind_log_id_lst,
+                    )
+                    if errors is not None:
+                        result_or_output_dic.update(zip(ind_input_id_lst, errors))
                         continue
 
                     if len(preds) != len(images):

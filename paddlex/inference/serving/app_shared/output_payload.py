@@ -14,7 +14,7 @@
 
 from typing import Optional
 
-from ..infra.storage import Storage, SupportsGetURL
+from ..infra.storage import Storage, SupportsGetURL, validate_output_log_id
 from ..infra.utils import base64_encode
 
 
@@ -35,8 +35,9 @@ def store_output_bytes(
         if not isinstance(file_storage, SupportsGetURL):
             raise TypeError("The provided storage does not support getting URLs.")
 
-    key = f"{log_id}/{filename}"
     if file_storage is not None:
+        validate_output_log_id(log_id)
+        key = f"{log_id}/{filename}"
         file_storage.set(key, data)
         if return_url:
             assert isinstance(file_storage, SupportsGetURL)
