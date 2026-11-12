@@ -15,12 +15,14 @@
 import warnings
 
 from concurrent.futures import ThreadPoolExecutor
-from operator import itemgetter
-from typing import Any, Dict, Final, List, Tuple
+from typing import Final, Tuple
 
+from paddlex.inference.serving.app_shared.paddleocr_vl import (
+    build_infer_result,
+    get_inference_kwargs,
+)
 from paddlex_hps_server import (
     BaseTritonPythonModel,
-    app_common,
     logging,
     protocol,
     schemas,
@@ -101,7 +103,8 @@ class TritonPythonModel(BaseTritonPythonModel):
     def run_batch(self, inputs, log_ids, batch_id):
         result_or_output_dic = {}
 
-        input_groups = self._group_inputs(inputs)
+        inference_kwargs = [get_inference_kwargs(request) for request in inputs]
+        input_groups = self._group_inputs(inference_kwargs)
 
         max_group_size = max(map(len, input_groups))
         if max_group_size > 1:
@@ -110,9 +113,8 @@ class TritonPythonModel(BaseTritonPythonModel):
             executor = _SequentialExecutor()
 
         with executor:
-            for input_group in input_groups:
-                input_ids_g = list(map(itemgetter(0), input_group))
-                inputs_g = list(map(itemgetter(1), input_group))
+            for input_ids_g in input_groups:
+                inputs_g = [inputs[i] for i in input_ids_g]
 
                 log_ids_g = [log_ids[i] for i in input_ids_g]
 
@@ -135,42 +137,7 @@ class TritonPythonModel(BaseTritonPythonModel):
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
                     preds = list(
-                        self.pipeline(
-                            images,
-                            use_doc_orientation_classify=inputs_g[
-                                0
-                            ].useDocOrientationClassify,
-                            use_doc_unwarping=inputs_g[0].useDocUnwarping,
-                            use_layout_detection=inputs_g[0].useLayoutDetection,
-                            use_layout_deform=inputs_g[0].useLayoutDeform,
-                            layout_deform_conf_thresh=inputs_g[
-                                0
-                            ].layoutDeformConfThresh,
-                            layout_deform_min_roll=inputs_g[0].layoutDeformMinRoll,
-                            layout_deform_min_shear=inputs_g[0].layoutDeformMinShear,
-                            layout_deform_min_keystone=inputs_g[
-                                0
-                            ].layoutDeformMinKeystone,
-                            use_chart_recognition=inputs_g[0].useChartRecognition,
-                            use_seal_recognition=inputs_g[0].useSealRecognition,
-                            use_ocr_for_image_block=inputs_g[0].useOcrForImageBlock,
-                            layout_threshold=inputs_g[0].layoutThreshold,
-                            layout_nms=inputs_g[0].layoutNms,
-                            layout_unclip_ratio=inputs_g[0].layoutUnclipRatio,
-                            layout_merge_bboxes_mode=inputs_g[0].layoutMergeBboxesMode,
-                            layout_shape_mode=inputs_g[0].layoutShapeMode,
-                            prompt_label=inputs_g[0].promptLabel,
-                            format_block_content=inputs_g[0].formatBlockContent,
-                            repetition_penalty=inputs_g[0].repetitionPenalty,
-                            temperature=inputs_g[0].temperature,
-                            top_p=inputs_g[0].topP,
-                            min_pixels=inputs_g[0].minPixels,
-                            max_pixels=inputs_g[0].maxPixels,
-                            max_new_tokens=inputs_g[0].maxNewTokens,
-                            merge_layout_blocks=inputs_g[0].mergeLayoutBlocks,
-                            markdown_ignore_labels=inputs_g[0].markdownIgnoreLabels,
-                            vlm_extra_args=inputs_g[0].vlmExtraArgs,
-                        )
+                        self.pipeline(images, **inference_kwargs[input_ids_g[0]])
                     )
 
                     if len(preds) != len(images):
@@ -204,59 +171,18 @@ class TritonPythonModel(BaseTritonPythonModel):
 
             return [result_or_output_dic[i] for i in range(len(inputs))]
 
-    def _group_inputs(self, inputs):
-        def _to_hashable(obj):
-            if isinstance(obj, dict):
-                return tuple(
-                    (_to_hashable(k), _to_hashable(v))
-                    for k, v in sorted(obj.items(), key=lambda x: repr(x[0]))
-                )
-            elif isinstance(obj, list):
-                return tuple(_to_hashable(x) for x in obj)
-            else:
-                return obj
-
-        def _group_key(input):
-            return tuple(
-                _to_hashable(value)
-                for value in (
-                    input.useDocOrientationClassify,
-                    input.useDocUnwarping,
-                    input.useLayoutDetection,
-                    input.useLayoutDeform,
-                    input.layoutDeformConfThresh,
-                    input.layoutDeformMinRoll,
-                    input.layoutDeformMinShear,
-                    input.layoutDeformMinKeystone,
-                    input.useChartRecognition,
-                    input.useSealRecognition,
-                    input.useOcrForImageBlock,
-                    input.layoutThreshold,
-                    input.layoutNms,
-                    input.layoutUnclipRatio,
-                    input.layoutMergeBboxesMode,
-                    input.layoutShapeMode,
-                    input.promptLabel,
-                    input.formatBlockContent,
-                    input.repetitionPenalty,
-                    input.temperature,
-                    input.topP,
-                    input.minPixels,
-                    input.maxPixels,
-                    input.maxNewTokens,
-                    input.mergeLayoutBlocks,
-                    input.markdownIgnoreLabels,
-                    input.vlmExtraArgs,
-                )
-            )
+    def _group_inputs(self, inference_kwargs):
+        def _freeze(value):
+            if isinstance(value, dict):
+                return frozenset((_freeze(k), _freeze(v)) for k, v in value.items())
+            if isinstance(value, (list, tuple)):
+                return type(value), tuple(_freeze(item) for item in value)
+            return type(value), value
 
         groups = {}
-        for i, inp in enumerate(inputs):
-            group_key = _group_key(inp)
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append((i, inp))
-
+        for i, kwargs in enumerate(inference_kwargs):
+            key = _freeze(kwargs)
+            groups.setdefault(key, []).append(i)
         return list(groups.values())
 
     def _preprocess(self, input, log_id):
@@ -311,76 +237,16 @@ class TritonPythonModel(BaseTritonPythonModel):
         return images, data_info, visualize_enabled
 
     def _postprocess(self, images, data_info, visualize_enabled, preds, log_id, input):
-        if input.restructurePages:
-            preds = self.pipeline.restructure_pages(
-                preds,
-                merge_tables=input.mergeTables,
-                relevel_titles=input.relevelTitles,
-                concatenate_pages=False,
-            )
-            preds = list(preds)
-        layout_parsing_results: List[Dict[str, Any]] = []
-        for i, (img, item) in enumerate(zip(images, preds)):
-            pruned_res = app_common.prune_result(item.json["res"])
-            # XXX
-            md_data = item._to_markdown(
-                pretty=input.prettifyMarkdown,
-                show_formula_number=input.showFormulaNumber,
-            )
-            md_text = md_data["markdown_texts"]
-            if input.returnMarkdownImages:
-                md_imgs = app_common.postprocess_images(
-                    md_data["markdown_images"],
-                    log_id,
-                    filename_template=f"markdown_{i}/{{key}}",
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                    max_img_size=self.context["max_output_img_size"],
-                )
-            else:
-                md_imgs = None
-            if visualize_enabled:
-                imgs = {
-                    "input_img": img,
-                    **item.img,
-                }
-                imgs = app_common.postprocess_images(
-                    imgs,
-                    log_id,
-                    filename_template=f"{{key}}_{i}.jpg",
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                    max_img_size=self.context["max_output_img_size"],
-                )
-            else:
-                imgs = {}
-            entry = dict(
-                prunedResult=pruned_res,
-                markdown=dict(
-                    text=md_text,
-                    images=md_imgs,
-                ),
-                outputImages=(
-                    {k: v for k, v in imgs.items() if k != "input_img"}
-                    if imgs
-                    else None
-                ),
-                inputImage=imgs.get("input_img"),
-            )
-            if app_common.normalize_output_formats(input.outputFormats):
-                entry["exports"] = app_common.build_pipeline_exports(
-                    input.outputFormats,
-                    item,
-                    log_id=log_id,
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                )
-            layout_parsing_results.append(entry)
-
-        return schemas.paddleocr_vl.InferResult(
-            layoutParsingResults=layout_parsing_results,
-            dataInfo=data_info,
+        return build_infer_result(
+            self.pipeline,
+            input,
+            images,
+            data_info,
+            preds,
+            log_id=log_id,
+            visualize=visualize_enabled,
+            file_storage=self.context["file_storage"],
+            return_urls=self.context["return_urls"],
+            url_expires_in=self.context["url_expires_in"],
+            max_output_img_size=self.context["max_output_img_size"],
         )
