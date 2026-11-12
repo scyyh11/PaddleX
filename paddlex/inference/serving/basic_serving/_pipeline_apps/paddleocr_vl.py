@@ -15,6 +15,7 @@
 from typing import Any
 
 from .....utils.deps import function_requires_deps, is_dep_available
+from ...app_shared.document_export import InvalidMarkdownImageError
 from ...app_shared.paddleocr_vl import (
     build_infer_result,
     build_restructure_pages_result,
@@ -35,7 +36,7 @@ from .._app import create_app, primary_operation
 from ._common import ocr as ocr_common
 
 if is_dep_available("fastapi"):
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
 
 
 @function_requires_deps("fastapi")
@@ -88,15 +89,18 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
         request: RestructurePagesRequest,
     ) -> AIStudioResultResponse[RestructurePagesResult]:
         log_id = request.logId if request.logId else serving_utils.generate_log_id()
-        result = await serving_utils.call_async(
-            build_restructure_pages_result,
-            ctx.pipeline.pipeline,
-            request,
-            log_id=log_id,
-            file_storage=ctx.extra["file_storage"],
-            return_urls=ctx.extra["return_urls"],
-            url_expires_in=ctx.extra["url_expires_in"],
-        )
+        try:
+            result = await serving_utils.call_async(
+                build_restructure_pages_result,
+                ctx.pipeline.pipeline,
+                request,
+                log_id=log_id,
+                file_storage=ctx.extra["file_storage"],
+                return_urls=ctx.extra["return_urls"],
+                url_expires_in=ctx.extra["url_expires_in"],
+            )
+        except InvalidMarkdownImageError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return AIStudioResultResponse[RestructurePagesResult](
             logId=log_id, result=result
         )

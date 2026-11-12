@@ -20,7 +20,8 @@ from PIL.Image import Image
 
 from ....utils.deps import function_requires_deps, is_dep_available
 from ..infra import utils as serving_utils
-from ..infra.storage import Storage, SupportsGetURL
+from ..infra.storage import Storage
+from .output_payload import store_output_bytes
 
 if is_dep_available("opencv-contrib-python"):
     import cv2
@@ -53,31 +54,21 @@ def postprocess_image(
     url_expires_in: int = -1,
     max_img_size: Optional[Tuple[int, int]] = None,
 ) -> str:
-    if return_url:
-        if not file_storage:
-            raise ValueError(
-                "`file_storage` must not be None when URLs need to be returned."
-            )
-        if not isinstance(file_storage, SupportsGetURL):
-            raise TypeError("The provided storage does not support getting URLs.")
-
-    key = f"{log_id}/{filename}"
     ext = os.path.splitext(filename)[1]
-    h, w = image.shape[0:2]
+    h, w = image.shape[:2]
     if max_img_size is not None:
-        if w > max_img_size[1] or h > max_img_size[0]:
-            if w / h > max_img_size[0] / max_img_size[1]:
-                factor = max_img_size[0] / w
-            else:
-                factor = max_img_size[1] / h
-            image = cv2.resize(image, (int(factor * w), int(factor * h)))
-    img_bytes = serving_utils.image_array_to_bytes(image, ext=ext)
-    if file_storage is not None:
-        file_storage.set(key, img_bytes)
-        if return_url:
-            assert isinstance(file_storage, SupportsGetURL)
-            return file_storage.get_url(key, expires_in=url_expires_in)
-    return serving_utils.base64_encode(img_bytes)
+        max_height, max_width = max_img_size
+        if h > max_height or w > max_width:
+            scale = min(max_height / h, max_width / w)
+            image = cv2.resize(image, (max(1, int(w * scale)), max(1, int(h * scale))))
+    return store_output_bytes(
+        serving_utils.image_array_to_bytes(image, ext=ext),
+        log_id,
+        filename,
+        file_storage=file_storage,
+        return_url=return_url,
+        url_expires_in=url_expires_in,
+    )
 
 
 def postprocess_images(

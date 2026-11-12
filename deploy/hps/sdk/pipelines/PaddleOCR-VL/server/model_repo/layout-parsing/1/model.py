@@ -12,14 +12,21 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-
 from concurrent.futures import ThreadPoolExecutor
-from typing import Final, Tuple
 
+from paddlex.inference.serving.app_shared.ocr_input import (
+    OCRInputError,
+    create_ocr_context,
+    decode_ocr_images,
+    get_file_type,
+)
 from paddlex.inference.serving.app_shared.paddleocr_vl import (
     build_infer_result,
     get_inference_kwargs,
+)
+from paddlex.inference.serving.infra.utils import (
+    PipelineOutputError,
+    collect_pipeline_predictions,
 )
 from paddlex_hps_server import (
     BaseTritonPythonModel,
@@ -28,10 +35,7 @@ from paddlex_hps_server import (
     schemas,
     utils,
 )
-from paddlex_hps_server.storage import SupportsGetURL, create_storage
-
-_DEFAULT_MAX_NUM_INPUT_IMGS: Final[int] = 10
-_DEFAULT_MAX_OUTPUT_IMG_SIZE: Final[Tuple[int, int]] = (2000, 2000)
+from paddlex_hps_server.batching import group_request_indices
 
 
 class _SequentialExecutor(object):
@@ -48,48 +52,7 @@ class _SequentialExecutor(object):
 class TritonPythonModel(BaseTritonPythonModel):
     def initialize(self, args):
         super().initialize(args)
-        self.context = {}
-        self.context["file_storage"] = None
-        self.context["return_urls"] = self.app_config.return_urls
-        self.context["url_expires_in"] = -1
-        self.context["max_num_input_imgs"] = _DEFAULT_MAX_NUM_INPUT_IMGS
-        self.context["max_output_img_size"] = _DEFAULT_MAX_OUTPUT_IMG_SIZE
-        if self.app_config.extra:
-            if "file_storage" in self.app_config.extra:
-                self.context["file_storage"] = create_storage(
-                    self.app_config.extra["file_storage"]
-                )
-            if "return_img_urls" in self.app_config.extra:
-                warnings.warn(
-                    "`Serving.extra.return_img_urls` is deprecated; use the "
-                    "top-level `Serving.return_urls` field instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                if self.context["return_urls"] is None:
-                    self.context["return_urls"] = bool(
-                        self.app_config.extra["return_img_urls"]
-                    )
-            if "url_expires_in" in self.app_config.extra:
-                self.context["url_expires_in"] = self.app_config.extra["url_expires_in"]
-            if "max_num_input_imgs" in self.app_config.extra:
-                self.context["max_num_input_imgs"] = self.app_config.extra[
-                    "max_num_input_imgs"
-                ]
-            if "max_output_img_size" in self.app_config.extra:
-                self.context["max_output_img_size"] = self.app_config.extra[
-                    "max_output_img_size"
-                ]
-        if self.context["return_urls"] is None:
-            self.context["return_urls"] = False
-        if self.context["return_urls"]:
-            file_storage = self.context["file_storage"]
-            if not file_storage:
-                raise ValueError(
-                    "The file storage must be properly configured when URLs need to be returned."
-                )
-            if not isinstance(file_storage, SupportsGetURL):
-                raise TypeError(f"{type(file_storage)} does not support getting URLs.")
+        self.context = create_ocr_context(self.app_config)
 
     def get_input_model_type(self):
         return schemas.paddleocr_vl.InferRequest
@@ -104,7 +67,7 @@ class TritonPythonModel(BaseTritonPythonModel):
         result_or_output_dic = {}
 
         inference_kwargs = [get_inference_kwargs(request) for request in inputs]
-        input_groups = self._group_inputs(inference_kwargs)
+        input_groups = group_request_indices(inference_kwargs)
 
         max_group_size = max(map(len, input_groups))
         if max_group_size > 1:
@@ -136,9 +99,18 @@ class TritonPythonModel(BaseTritonPythonModel):
 
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
-                    preds = list(
-                        self.pipeline(images, **inference_kwargs[input_ids_g[0]])
-                    )
+                    try:
+                        preds = collect_pipeline_predictions(
+                            self.pipeline(images, **inference_kwargs[input_ids_g[0]])
+                        )
+                    except PipelineOutputError as exc:
+                        for input_id, log_id in zip(ind_input_id_lst, ind_log_id_lst):
+                            result_or_output_dic[input_id] = (
+                                protocol.create_aistudio_output_without_result(
+                                    500, str(exc), log_id=log_id
+                                )
+                            )
+                        continue
 
                     if len(preds) != len(images):
                         raise RuntimeError(
@@ -171,67 +143,27 @@ class TritonPythonModel(BaseTritonPythonModel):
 
             return [result_or_output_dic[i] for i in range(len(inputs))]
 
-    def _group_inputs(self, inference_kwargs):
-        def _freeze(value):
-            if isinstance(value, dict):
-                return frozenset((_freeze(k), _freeze(v)) for k, v in value.items())
-            if isinstance(value, (list, tuple)):
-                return type(value), tuple(_freeze(item) for item in value)
-            return type(value), value
-
-        groups = {}
-        for i, kwargs in enumerate(inference_kwargs):
-            key = _freeze(kwargs)
-            groups.setdefault(key, []).append(i)
-        return list(groups.values())
-
     def _preprocess(self, input, log_id):
-        if input.fileType is None:
-            if utils.is_url(input.file):
-                maybe_file_type = utils.infer_file_type(input.file)
-                if maybe_file_type is None or not (
-                    maybe_file_type == "PDF" or maybe_file_type == "IMAGE"
-                ):
-                    return protocol.create_aistudio_output_without_result(
-                        422,
-                        "Unsupported file type",
-                        log_id=log_id,
-                    )
-                file_type = maybe_file_type
-            else:
-                return protocol.create_aistudio_output_without_result(
-                    422,
-                    "File type cannot be determined",
-                    log_id=log_id,
-                )
-        else:
-            file_type = "PDF" if input.fileType == 0 else "IMAGE"
         visualize_enabled = (
             input.visualize
             if input.visualize is not None
             else self.app_config.visualize
         )
-
         try:
+            file_type = get_file_type(input)
             file_bytes = utils.get_raw_bytes(input.file)
-            images, data_info = utils.file_to_images(
-                file_bytes,
-                file_type,
-                max_num_imgs=self.context["max_num_input_imgs"],
+            images, data_info = decode_ocr_images(
+                file_bytes, file_type, self.context["max_num_input_imgs"]
             )
-        except utils.ImageTooLargeError as e:
-            logging.error("Input image or document page exceeds pixel limit: %s", e)
+        except OCRInputError as exc:
+            logging.error("Failed to read input file: %s", exc)
             return protocol.create_aistudio_output_without_result(
-                422,
-                str(e),
-                log_id=log_id,
+                422, str(exc), log_id=log_id
             )
-        except Exception as e:
-            logging.error("Failed to get input file bytes: %s", e)
+        except Exception as exc:
+            logging.error("Failed to read input file: %s", exc)
             return protocol.create_aistudio_output_without_result(
-                422,
-                "Input file is invalid",
-                log_id=log_id,
+                422, "Invalid input file", log_id=log_id
             )
 
         return images, data_info, visualize_enabled

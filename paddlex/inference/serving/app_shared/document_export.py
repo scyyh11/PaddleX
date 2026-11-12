@@ -21,44 +21,41 @@ import tempfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from PIL import Image
 from PIL.Image import Image as PILImage
 
 from paddlex.inference.pipelines.layout_parsing.utils import construct_img_path
 
-from ....utils.deps import is_dep_available
 from ..infra import utils as serving_utils
-from ..infra.storage import Storage, SupportsGetURL
+from ..infra.storage import Storage
 from ..schemas.shared.export import (
     DocumentExports,
     ExportContent,
     normalize_output_formats,
 )
+from .output_payload import store_output_bytes
 
-if is_dep_available("requests"):
-    import requests
+
+class InvalidMarkdownImageError(ValueError):
+    """The request did not contain a valid inline Markdown image."""
 
 
 def _decode_image_value(value: str) -> PILImage:
-    value = (value or "").strip()
-    if not value:
-        raise ValueError("Empty image payload")
-    if value.startswith(("http://", "https://")):
-        if not is_dep_available("requests"):
-            raise RuntimeError(
-                "The `requests` package is required to load export images from URLs."
-            )
-        resp = requests.get(value, timeout=120)
-        resp.raise_for_status()
-        return serving_utils.image_bytes_to_image(resp.content)
+    value = value.strip()
     if value.startswith("data:"):
-        comma = value.find(",")
-        if comma == -1:
-            raise ValueError("Invalid data URL for image")
-        b64_part = value[comma + 1 :]
-        raw = base64.b64decode(b64_part)
-        return serving_utils.image_bytes_to_image(raw)
-    raw = base64.b64decode(value)
-    return serving_utils.image_bytes_to_image(raw)
+        header, separator, value = value.partition(",")
+        if not separator or not header.endswith(";base64"):
+            raise InvalidMarkdownImageError("Expected a Base64 image data URL.")
+    try:
+        data = base64.b64decode("".join(value.split()), validate=True)
+        image = serving_utils.image_bytes_to_image(data)
+        image.load()
+    except (ValueError, OSError, Image.DecompressionBombError) as exc:
+        raise InvalidMarkdownImageError(
+            "DOCX export requires inline Base64 Markdown images. "
+            "Supply image bytes or a Base64 data URL."
+        ) from exc
+    return image
 
 
 def refill_paddleocr_vl_images_from_markdown(
@@ -66,7 +63,7 @@ def refill_paddleocr_vl_images_from_markdown(
 ) -> None:
     """Restore PIL images on `PaddleOCRVLResult` blocks using path→payload from markdown.
 
-    Payloads may be raw Base64, data URLs, or http(s) URLs (same as image outputs).
+    Payloads may be raw Base64 or Base64 data URLs.
     """
     if not markdown_images:
         return
@@ -107,21 +104,14 @@ def postprocess_docx_bytes(
     return_url: bool = False,
     url_expires_in: int = -1,
 ) -> str:
-    if return_url:
-        if not file_storage:
-            raise ValueError(
-                "`file_storage` must not be None when URLs need to be returned."
-            )
-        if not isinstance(file_storage, SupportsGetURL):
-            raise TypeError("The provided storage does not support getting URLs.")
-
-    key = f"{log_id}/{filename}"
-    if file_storage is not None:
-        file_storage.set(key, doc_bytes)
-        if return_url:
-            assert isinstance(file_storage, SupportsGetURL)
-            return file_storage.get_url(key, expires_in=url_expires_in)
-    return serving_utils.base64_encode(doc_bytes)
+    return store_output_bytes(
+        doc_bytes,
+        log_id,
+        filename,
+        file_storage=file_storage,
+        return_url=return_url,
+        url_expires_in=url_expires_in,
+    )
 
 
 def docx_bytes_and_filename_from_word_mixin(result: Any) -> Tuple[bytes, str]:

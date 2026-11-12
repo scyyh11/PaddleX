@@ -12,15 +12,16 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Optional
-
+from paddlex.inference.serving.app_shared.document_export import (
+    build_pipeline_exports,
+    refill_paddleocr_vl_images_from_markdown,
+)
 from paddlex.inference.serving.app_shared.image_output import (
     postprocess_image,
     postprocess_images,
     prune_result,
 )
-
-from .storage import Storage
+from paddlex.inference.serving.schemas.shared.export import normalize_output_formats
 
 __all__ = [
     "postprocess_image",
@@ -28,47 +29,6 @@ __all__ = [
     "prune_result",
     "normalize_output_formats",
     "build_pipeline_exports",
+    # The released 3.7.2 HPS SDK imports this name at runtime.
     "refill_paddleocr_vl_images_from_markdown",
 ]
-
-
-def normalize_output_formats(output_formats):
-    """Which extra formats the client requested (e.g. docx). Delegates to serving schemas."""
-    from paddlex.inference.serving.schemas.shared.export import (
-        normalize_output_formats as _normalize_output_formats,
-    )
-
-    return _normalize_output_formats(output_formats)
-
-
-def build_pipeline_exports(
-    output_formats,
-    result_obj,
-    *,
-    log_id: str,
-    file_storage: Optional[Storage] = None,
-    return_urls: bool = False,
-    url_expires_in: int = -1,
-):
-    """Build optional `exports` payload for validated `outputFormats`."""
-    from paddlex.inference.serving.app_shared.document_export import (
-        build_pipeline_exports as _build_pipeline_exports,
-    )
-
-    return _build_pipeline_exports(
-        output_formats,
-        result_obj,
-        log_id=log_id,
-        file_storage=file_storage,
-        return_urls=return_urls,
-        url_expires_in=url_expires_in,
-    )
-
-
-def refill_paddleocr_vl_images_from_markdown(result, markdown_images):
-    """Restore PIL images from markdown image map before DOCX export (PaddleOCR-VL restructure)."""
-    from paddlex.inference.serving.app_shared.document_export import (
-        refill_paddleocr_vl_images_from_markdown as _refill,
-    )
-
-    return _refill(result, markdown_images)

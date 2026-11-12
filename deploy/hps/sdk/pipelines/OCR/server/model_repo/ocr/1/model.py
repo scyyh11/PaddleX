@@ -16,7 +16,6 @@
 import warnings
 
 from concurrent.futures import ThreadPoolExecutor
-from operator import itemgetter
 from typing import Any, Dict, Final, List, Tuple
 
 from paddlex_hps_server import (
@@ -27,6 +26,7 @@ from paddlex_hps_server import (
     schemas,
     utils,
 )
+from paddlex_hps_server.batching import group_request_indices
 from paddlex_hps_server.storage import SupportsGetURL, create_storage
 
 _DEFAULT_MAX_NUM_INPUT_IMGS: Final[int] = 10
@@ -102,7 +102,8 @@ class TritonPythonModel(BaseTritonPythonModel):
     def run_batch(self, inputs, log_ids, batch_id):
         result_or_output_dic = {}
 
-        input_groups = self._group_inputs(inputs)
+        inference_kwargs = [self._get_inference_kwargs(request) for request in inputs]
+        input_groups = group_request_indices(inference_kwargs)
 
         max_group_size = max(map(len, input_groups))
         if max_group_size > 1:
@@ -111,9 +112,8 @@ class TritonPythonModel(BaseTritonPythonModel):
             executor = _SequentialExecutor()
 
         with executor:
-            for input_group in input_groups:
-                input_ids_g = list(map(itemgetter(0), input_group))
-                inputs_g = list(map(itemgetter(1), input_group))
+            for input_ids_g in input_groups:
+                inputs_g = [inputs[i] for i in input_ids_g]
 
                 log_ids_g = [log_ids[i] for i in input_ids_g]
 
@@ -136,21 +136,7 @@ class TritonPythonModel(BaseTritonPythonModel):
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
                     preds = list(
-                        self.pipeline(
-                            images,
-                            use_doc_orientation_classify=inputs_g[
-                                0
-                            ].useDocOrientationClassify,
-                            use_doc_unwarping=inputs_g[0].useDocUnwarping,
-                            use_textline_orientation=inputs_g[0].useTextlineOrientation,
-                            text_det_limit_side_len=inputs_g[0].textDetLimitSideLen,
-                            text_det_limit_type=inputs_g[0].textDetLimitType,
-                            text_det_thresh=inputs_g[0].textDetThresh,
-                            text_det_box_thresh=inputs_g[0].textDetBoxThresh,
-                            text_det_unclip_ratio=inputs_g[0].textDetUnclipRatio,
-                            text_rec_score_thresh=inputs_g[0].textRecScoreThresh,
-                            return_word_box=inputs_g[0].returnWordBox,
-                        )
+                        self.pipeline(images, **inference_kwargs[input_ids_g[0]])
                     )
 
                     if len(preds) != len(images):
@@ -184,47 +170,20 @@ class TritonPythonModel(BaseTritonPythonModel):
 
             return [result_or_output_dic[i] for i in range(len(inputs))]
 
-    def _group_inputs(self, inputs):
-        def _to_hashable(obj):
-            if isinstance(obj, dict):
-                return tuple(
-                    (_to_hashable(k), _to_hashable(v))
-                    for k, v in sorted(obj.items(), key=lambda x: repr(x[0]))
-                )
-            elif isinstance(obj, list):
-                return tuple(_to_hashable(x) for x in obj)
-            else:
-                return obj
-
-        def _hash(input):
-            return hash(
-                tuple(
-                    map(
-                        _to_hashable,
-                        (
-                            input.useDocOrientationClassify,
-                            input.useDocUnwarping,
-                            input.useTextlineOrientation,
-                            input.textDetLimitSideLen,
-                            input.textDetLimitType,
-                            input.textDetThresh,
-                            input.textDetBoxThresh,
-                            input.textDetUnclipRatio,
-                            input.textRecScoreThresh,
-                            input.returnWordBox,
-                        ),
-                    )
-                )
-            )
-
-        groups = {}
-        for i, inp in enumerate(inputs):
-            group_key = _hash(inp)
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append((i, inp))
-
-        return list(groups.values())
+    @staticmethod
+    def _get_inference_kwargs(request):
+        return dict(
+            use_doc_orientation_classify=request.useDocOrientationClassify,
+            use_doc_unwarping=request.useDocUnwarping,
+            use_textline_orientation=request.useTextlineOrientation,
+            text_det_limit_side_len=request.textDetLimitSideLen,
+            text_det_limit_type=request.textDetLimitType,
+            text_det_thresh=request.textDetThresh,
+            text_det_box_thresh=request.textDetBoxThresh,
+            text_det_unclip_ratio=request.textDetUnclipRatio,
+            text_rec_score_thresh=request.textRecScoreThresh,
+            return_word_box=request.returnWordBox,
+        )
 
     def _preprocess(self, input, log_id):
         if input.fileType is None:

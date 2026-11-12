@@ -17,24 +17,40 @@
 import base64
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
+import requests
 
+from paddlex.utils.deps import is_serving_plugin_available
+
+if not is_serving_plugin_available():
+    pytest.skip("PaddleX serving dependencies are required", allow_module_level=True)
+
+from paddlex.inference.serving.app_shared.document_export import postprocess_docx_bytes
+from paddlex.inference.serving.app_shared.image_output import postprocess_image
+from paddlex.inference.serving.app_shared.ocr_input import create_ocr_context
 from paddlex.inference.serving.infra.config import AppConfig
-from paddlex.inference.serving.infra.utils import image_array_to_bytes
+from paddlex.inference.serving.infra.utils import (
+    image_array_to_bytes,
+    image_bytes_to_image,
+)
 from paddlex.inference.serving.schemas.paddleocr_vl import (
     InferRequest,
     RestructurePagesRequest,
 )
 
 HPS = Path(__file__).resolve().parents[2] / "deploy/hps"
-MODEL_REPO = HPS / "sdk/pipelines/PaddleOCR-VL/server/model_repo"
+SDK_PIPELINES = HPS / "sdk/pipelines"
 
 
 class Prediction(dict):
-    def __init__(self, text, image):
-        super().__init__(parsing_res_list=[])
+    def __init__(self, text, image, *, restore_image=False):
+        blocks = []
+        if restore_image:
+            blocks.append(SimpleNamespace(image={"path": "page.png", "img": None}))
+        super().__init__(parsing_res_list=blocks)
         self.text = text
         self.img = {"layout": image}
         self.json = {"res": {"text": text, "input_path": "page.png", "page_index": 0}}
@@ -49,7 +65,11 @@ class Prediction(dict):
         return "page.png"
 
     def save_to_word(self, directory):
-        (Path(directory) / "page.docx").write_bytes(self.text.encode())
+        text = self.text
+        for block in self["parsing_res_list"]:
+            if block.image["img"] is not None:
+                text += f" [{block.image['img'].size}]"
+        (Path(directory) / "page.docx").write_bytes(text.encode())
 
 
 class Pipeline:
@@ -62,6 +82,9 @@ class Pipeline:
 
     def predict(self, images, **kwargs):
         self.inference_calls.append((len(images), kwargs))
+        if kwargs.get("layout_deform_min_roll") == 99:
+            yield {"error": "Invalid model settings"}
+            raise AssertionError("The serving adapter must stop after a pipeline error")
         for image in images:
             yield Prediction(f"prediction {len(self.inference_calls)}", image)
 
@@ -69,9 +92,12 @@ class Pipeline:
         self.restructure_calls.append(kwargs)
         if isinstance(pages[0], Prediction):
             return pages
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+        if kwargs["concatenate_pages"]:
+            text = " + ".join(page["res"]["text"] for page in pages)
+            return [Prediction(text, image, restore_image=True)]
         return [
-            Prediction(page["res"]["text"], np.zeros((4, 5, 3), dtype=np.uint8))
-            for page in pages
+            Prediction(page["res"]["text"], image, restore_image=True) for page in pages
         ]
 
 
@@ -85,22 +111,17 @@ def file_payload():
 def hps_model(monkeypatch):
     monkeypatch.syspath_prepend(str(HPS / "server_env/paddlex-hps-server/src"))
 
-    def load_model(name):
-        spec = importlib.util.spec_from_file_location(
-            name, MODEL_REPO / name / "1/model.py"
+    def load_model(name, pipeline="PaddleOCR-VL"):
+        model_file = (
+            SDK_PIPELINES / pipeline / "server/model_repo" / name / "1/model.py"
         )
+        spec = importlib.util.spec_from_file_location(name, model_file)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         model = module.TritonPythonModel()
         model.pipeline = Pipeline()
         model.app_config = AppConfig()
-        model.context = {
-            "file_storage": None,
-            "return_urls": False,
-            "url_expires_in": -1,
-            "max_num_input_imgs": 10,
-            "max_output_img_size": (2000, 2000),
-        }
+        model.context = create_ocr_context(model.app_config)
         return model
 
     return load_model
@@ -109,7 +130,6 @@ def hps_model(monkeypatch):
 @pytest.fixture
 def basic_client():
     pytest.importorskip("httpx")
-    pytest.importorskip("fastapi")
     from fastapi.testclient import TestClient
 
     from paddlex.inference.serving.basic_serving._pipeline_apps.paddleocr_vl import (
@@ -235,8 +255,152 @@ def test_restructure_pages_matches_between_adapters(
     )
     assert basic_pipeline.restructure_calls == hps.pipeline.restructure_calls
     first = result.layoutParsingResults[0]
-    assert first.markdown.text == "one:False:True"
+    text = "one + two" if concatenate else "one"
+    assert first.markdown.text == f"{text}:False:True"
+    assert base64.b64decode(first.exports.docx.content).decode() == text
     assert len(result.layoutParsingResults) == (1 if concatenate else 2)
     assert first.markdown.images == (
         {"a.png": "a", "b.png": "b"} if concatenate else {"a.png": "a"}
     )
+
+
+def test_hps_pipeline_error_only_affects_its_request_group(
+    basic_client, hps_model, file_payload
+):
+    payload = {"file": file_payload, "fileType": 1, "useLayoutDeform": True}
+    invalid = {**payload, "layoutDeformMinRoll": 99}
+    valid = {**payload, "layoutDeformMinRoll": 2}
+
+    client, _ = basic_client
+    response = client.post("/layout-parsing", json={**invalid, "logId": "first"})
+    assert response.status_code == 500
+
+    model = hps_model("layout-parsing")
+    failed, success, same_group = model.run_batch(
+        [InferRequest(**p) for p in (invalid, valid, invalid)],
+        ["first", "second", "third"],
+        "batch",
+    )
+    assert failed.model_dump() == response.json()
+    assert success.layoutParsingResults[0].prunedResult == {"text": "prediction 2"}
+    assert same_group.errorCode == 500
+    assert same_group.logId == "third"
+
+
+@pytest.mark.parametrize("image_source", ["base64", "data", "url"])
+def test_docx_restructure_accepts_only_inline_images(
+    basic_client, hps_model, file_payload, image_source, monkeypatch
+):
+    def reject_network(*args, **kwargs):
+        raise AssertionError("DOCX image restoration must not access the network")
+
+    monkeypatch.setattr(requests.sessions.Session, "request", reject_network)
+    images = {
+        "base64": file_payload,
+        "data": f"data:image/png;base64,{file_payload}",
+        "url": "https://example.invalid/page.png",
+    }
+    payload = {
+        "pages": [
+            {
+                "prunedResult": {"text": "one"},
+                "markdownImages": {"page.png": images[image_source]},
+            }
+        ],
+        "outputFormats": ["docx"],
+        "logId": "test",
+    }
+    client, _ = basic_client
+    response = client.post("/restructure-pages", json=payload)
+    hps = hps_model("restructure-pages")
+    result = hps.run(RestructurePagesRequest(**payload), "test")
+    if image_source == "url":
+        assert response.status_code == 422
+        assert response.json() == result.model_dump()
+        assert "inline Base64" in result.errorMsg
+    else:
+        assert response.status_code == 200
+        assert response.json()["result"] == result.model_dump(
+            mode="json", exclude_none=True
+        )
+        docx = result.layoutParsingResults[0].exports.docx.content
+        assert base64.b64decode(docx) == b"one [(5, 4)]"
+
+
+@pytest.mark.parametrize(
+    ("image_shape", "limits", "expected"),
+    [((60, 100), (25, 70), (25, 41)), ((60, 100), (50, 35), (21, 35))],
+)
+def test_image_output_fits_rectangular_limits(image_shape, limits, expected):
+    image = np.zeros((*image_shape, 3), dtype=np.uint8)
+    encoded = postprocess_image(image, "test", "page.png", max_img_size=limits)
+    resized = image_bytes_to_image(base64.b64decode(encoded))
+    assert (resized.height, resized.width) == expected
+
+
+def test_image_and_docx_output_use_the_same_storage_policy():
+    class Storage:
+        def __init__(self):
+            self.items = {}
+
+        def set(self, key, data):
+            self.items[key] = data
+
+        def get_url(self, key, expires_in):
+            return f"https://storage.example.invalid/{key}?expires={expires_in}"
+
+    storage = Storage()
+    options = {"file_storage": storage, "return_url": True, "url_expires_in": 17}
+    image_url = postprocess_image(
+        np.zeros((4, 5, 3), dtype=np.uint8), "test", "page.png", **options
+    )
+    docx_url = postprocess_docx_bytes(b"docx", "test", "page.docx", **options)
+    assert image_url.endswith("/test/page.png?expires=17")
+    assert docx_url.endswith("/test/page.docx?expires=17")
+    assert image_bytes_to_image(storage.items["test/page.png"]).size == (5, 4)
+    assert storage.items["test/page.docx"] == b"docx"
+
+
+@pytest.mark.parametrize(
+    ("file", "detail"),
+    [
+        ("aGVsbG8=", "File type cannot be determined"),
+        ("https://example.invalid/notes.txt", "Unsupported file type"),
+    ],
+)
+def test_layout_parsing_reports_the_same_input_type_errors(
+    basic_client, hps_model, file, detail
+):
+    payload = {"file": file, "logId": "input"}
+    client, _ = basic_client
+    response = client.post("/layout-parsing", json=payload)
+    model = hps_model("layout-parsing")
+    (result,) = model.run_batch([InferRequest(**payload)], ["input"], "batch")
+    assert response.status_code == 422
+    assert response.json() == result.model_dump()
+    assert result.errorMsg == detail
+
+
+@pytest.mark.parametrize(
+    ("pipeline", "route"), [("OCR", "ocr"), ("PP-StructureV3", "layout-parsing")]
+)
+def test_other_hps_models_group_by_effective_inference_arguments(
+    hps_model, file_payload, pipeline, route
+):
+    model = hps_model(route, pipeline)
+    model._postprocess = lambda images, info, visualize, preds, log_id, req: preds
+    request_type = model.get_input_model_type()
+    requests = [
+        request_type(file=file_payload, fileType=1, textDetLimitSideLen=size)
+        for size in (64, 128, 64)
+    ]
+    results = model.run_batch(requests, ["a", "b", "c"], "batch")
+    assert [
+        (count, kwargs["text_det_limit_side_len"])
+        for count, kwargs in model.pipeline.inference_calls
+    ] == [(2, 64), (1, 128)]
+    assert [preds[0].text for preds in results] == [
+        "prediction 1",
+        "prediction 2",
+        "prediction 1",
+    ]
