@@ -1444,7 +1444,7 @@ By default, there is no page limit. To set a page limit on the server, set <code
 <tr>
 <td><code>markdownImages</code></td>
 <td><code>object</code>|<code>null</code></td>
-<td>The <code>images</code> property of the <code>markdown</code> object returned by the <code>infer</code> operation.</td>
+<td>The <code>images</code> property of the <code>markdown</code> object returned by the <code>infer</code> operation. For DOCX export, supply images as Base64 or Base64 data URLs. If <code>infer</code> returns image URLs, fetch and encode the images on the client first.</td>
 </tr>
 </tbody>
 </table>

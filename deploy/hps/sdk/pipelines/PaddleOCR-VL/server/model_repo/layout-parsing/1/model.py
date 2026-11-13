@@ -12,24 +12,26 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-import warnings
-
 from concurrent.futures import ThreadPoolExecutor
-from operator import itemgetter
-from typing import Any, Dict, Final, List, Tuple
 
+from paddlex.inference.serving.app_shared.ocr_input import (
+    OCRInputError,
+    create_ocr_context,
+    decode_ocr_images,
+    get_file_type,
+)
+from paddlex.inference.serving.app_shared.paddleocr_vl import (
+    build_infer_result,
+    get_inference_kwargs,
+)
 from paddlex_hps_server import (
     BaseTritonPythonModel,
-    app_common,
     logging,
     protocol,
     schemas,
     utils,
 )
-from paddlex_hps_server.storage import SupportsGetURL, create_storage
-
-_DEFAULT_MAX_NUM_INPUT_IMGS: Final[int] = 10
-_DEFAULT_MAX_OUTPUT_IMG_SIZE: Final[Tuple[int, int]] = (2000, 2000)
+from paddlex_hps_server.batching import group_request_indices, predict_request_group
 
 
 class _SequentialExecutor(object):
@@ -46,48 +48,7 @@ class _SequentialExecutor(object):
 class TritonPythonModel(BaseTritonPythonModel):
     def initialize(self, args):
         super().initialize(args)
-        self.context = {}
-        self.context["file_storage"] = None
-        self.context["return_urls"] = self.app_config.return_urls
-        self.context["url_expires_in"] = -1
-        self.context["max_num_input_imgs"] = _DEFAULT_MAX_NUM_INPUT_IMGS
-        self.context["max_output_img_size"] = _DEFAULT_MAX_OUTPUT_IMG_SIZE
-        if self.app_config.extra:
-            if "file_storage" in self.app_config.extra:
-                self.context["file_storage"] = create_storage(
-                    self.app_config.extra["file_storage"]
-                )
-            if "return_img_urls" in self.app_config.extra:
-                warnings.warn(
-                    "`Serving.extra.return_img_urls` is deprecated; use the "
-                    "top-level `Serving.return_urls` field instead.",
-                    DeprecationWarning,
-                    stacklevel=2,
-                )
-                if self.context["return_urls"] is None:
-                    self.context["return_urls"] = bool(
-                        self.app_config.extra["return_img_urls"]
-                    )
-            if "url_expires_in" in self.app_config.extra:
-                self.context["url_expires_in"] = self.app_config.extra["url_expires_in"]
-            if "max_num_input_imgs" in self.app_config.extra:
-                self.context["max_num_input_imgs"] = self.app_config.extra[
-                    "max_num_input_imgs"
-                ]
-            if "max_output_img_size" in self.app_config.extra:
-                self.context["max_output_img_size"] = self.app_config.extra[
-                    "max_output_img_size"
-                ]
-        if self.context["return_urls"] is None:
-            self.context["return_urls"] = False
-        if self.context["return_urls"]:
-            file_storage = self.context["file_storage"]
-            if not file_storage:
-                raise ValueError(
-                    "The file storage must be properly configured when URLs need to be returned."
-                )
-            if not isinstance(file_storage, SupportsGetURL):
-                raise TypeError(f"{type(file_storage)} does not support getting URLs.")
+        self.context = create_ocr_context(self.app_config)
 
     def get_input_model_type(self):
         return schemas.paddleocr_vl.InferRequest
@@ -101,7 +62,8 @@ class TritonPythonModel(BaseTritonPythonModel):
     def run_batch(self, inputs, log_ids, batch_id):
         result_or_output_dic = {}
 
-        input_groups = self._group_inputs(inputs)
+        inference_kwargs = [get_inference_kwargs(request) for request in inputs]
+        input_groups = group_request_indices(inference_kwargs)
 
         max_group_size = max(map(len, input_groups))
         if max_group_size > 1:
@@ -110,9 +72,8 @@ class TritonPythonModel(BaseTritonPythonModel):
             executor = _SequentialExecutor()
 
         with executor:
-            for input_group in input_groups:
-                input_ids_g = list(map(itemgetter(0), input_group))
-                inputs_g = list(map(itemgetter(1), input_group))
+            for input_ids_g in input_groups:
+                inputs_g = [inputs[i] for i in input_ids_g]
 
                 log_ids_g = [log_ids[i] for i in input_ids_g]
 
@@ -134,44 +95,15 @@ class TritonPythonModel(BaseTritonPythonModel):
 
                 if len(ind_img_lsts):
                     images = [img for item in ind_img_lsts for img in item]
-                    preds = list(
-                        self.pipeline(
-                            images,
-                            use_doc_orientation_classify=inputs_g[
-                                0
-                            ].useDocOrientationClassify,
-                            use_doc_unwarping=inputs_g[0].useDocUnwarping,
-                            use_layout_detection=inputs_g[0].useLayoutDetection,
-                            use_layout_deform=inputs_g[0].useLayoutDeform,
-                            layout_deform_conf_thresh=inputs_g[
-                                0
-                            ].layoutDeformConfThresh,
-                            layout_deform_min_roll=inputs_g[0].layoutDeformMinRoll,
-                            layout_deform_min_shear=inputs_g[0].layoutDeformMinShear,
-                            layout_deform_min_keystone=inputs_g[
-                                0
-                            ].layoutDeformMinKeystone,
-                            use_chart_recognition=inputs_g[0].useChartRecognition,
-                            use_seal_recognition=inputs_g[0].useSealRecognition,
-                            use_ocr_for_image_block=inputs_g[0].useOcrForImageBlock,
-                            layout_threshold=inputs_g[0].layoutThreshold,
-                            layout_nms=inputs_g[0].layoutNms,
-                            layout_unclip_ratio=inputs_g[0].layoutUnclipRatio,
-                            layout_merge_bboxes_mode=inputs_g[0].layoutMergeBboxesMode,
-                            layout_shape_mode=inputs_g[0].layoutShapeMode,
-                            prompt_label=inputs_g[0].promptLabel,
-                            format_block_content=inputs_g[0].formatBlockContent,
-                            repetition_penalty=inputs_g[0].repetitionPenalty,
-                            temperature=inputs_g[0].temperature,
-                            top_p=inputs_g[0].topP,
-                            min_pixels=inputs_g[0].minPixels,
-                            max_pixels=inputs_g[0].maxPixels,
-                            max_new_tokens=inputs_g[0].maxNewTokens,
-                            merge_layout_blocks=inputs_g[0].mergeLayoutBlocks,
-                            markdown_ignore_labels=inputs_g[0].markdownIgnoreLabels,
-                            vlm_extra_args=inputs_g[0].vlmExtraArgs,
-                        )
+                    preds, errors = predict_request_group(
+                        self.pipeline,
+                        images,
+                        inference_kwargs[input_ids_g[0]],
+                        ind_log_id_lst,
                     )
+                    if errors is not None:
+                        result_or_output_dic.update(zip(ind_input_id_lst, errors))
+                        continue
 
                     if len(preds) != len(images):
                         raise RuntimeError(
@@ -204,183 +136,42 @@ class TritonPythonModel(BaseTritonPythonModel):
 
             return [result_or_output_dic[i] for i in range(len(inputs))]
 
-    def _group_inputs(self, inputs):
-        def _to_hashable(obj):
-            if isinstance(obj, dict):
-                return tuple(
-                    (_to_hashable(k), _to_hashable(v))
-                    for k, v in sorted(obj.items(), key=lambda x: repr(x[0]))
-                )
-            elif isinstance(obj, list):
-                return tuple(_to_hashable(x) for x in obj)
-            else:
-                return obj
-
-        def _group_key(input):
-            return tuple(
-                _to_hashable(value)
-                for value in (
-                    input.useDocOrientationClassify,
-                    input.useDocUnwarping,
-                    input.useLayoutDetection,
-                    input.useLayoutDeform,
-                    input.layoutDeformConfThresh,
-                    input.layoutDeformMinRoll,
-                    input.layoutDeformMinShear,
-                    input.layoutDeformMinKeystone,
-                    input.useChartRecognition,
-                    input.useSealRecognition,
-                    input.useOcrForImageBlock,
-                    input.layoutThreshold,
-                    input.layoutNms,
-                    input.layoutUnclipRatio,
-                    input.layoutMergeBboxesMode,
-                    input.layoutShapeMode,
-                    input.promptLabel,
-                    input.formatBlockContent,
-                    input.repetitionPenalty,
-                    input.temperature,
-                    input.topP,
-                    input.minPixels,
-                    input.maxPixels,
-                    input.maxNewTokens,
-                    input.mergeLayoutBlocks,
-                    input.markdownIgnoreLabels,
-                    input.vlmExtraArgs,
-                )
-            )
-
-        groups = {}
-        for i, inp in enumerate(inputs):
-            group_key = _group_key(inp)
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append((i, inp))
-
-        return list(groups.values())
-
     def _preprocess(self, input, log_id):
-        if input.fileType is None:
-            if utils.is_url(input.file):
-                maybe_file_type = utils.infer_file_type(input.file)
-                if maybe_file_type is None or not (
-                    maybe_file_type == "PDF" or maybe_file_type == "IMAGE"
-                ):
-                    return protocol.create_aistudio_output_without_result(
-                        422,
-                        "Unsupported file type",
-                        log_id=log_id,
-                    )
-                file_type = maybe_file_type
-            else:
-                return protocol.create_aistudio_output_without_result(
-                    422,
-                    "File type cannot be determined",
-                    log_id=log_id,
-                )
-        else:
-            file_type = "PDF" if input.fileType == 0 else "IMAGE"
         visualize_enabled = (
             input.visualize
             if input.visualize is not None
             else self.app_config.visualize
         )
-
         try:
+            file_type = get_file_type(input)
             file_bytes = utils.get_raw_bytes(input.file)
-            images, data_info = utils.file_to_images(
-                file_bytes,
-                file_type,
-                max_num_imgs=self.context["max_num_input_imgs"],
+            images, data_info = decode_ocr_images(
+                file_bytes, file_type, self.context["max_num_input_imgs"]
             )
-        except utils.ImageTooLargeError as e:
-            logging.error("Input image or document page exceeds pixel limit: %s", e)
+        except OCRInputError as exc:
+            logging.error("Failed to read input file: %s", exc)
             return protocol.create_aistudio_output_without_result(
-                422,
-                str(e),
-                log_id=log_id,
+                422, str(exc), log_id=log_id
             )
-        except Exception as e:
-            logging.error("Failed to get input file bytes: %s", e)
+        except Exception as exc:
+            logging.error("Failed to read input file: %s", exc)
             return protocol.create_aistudio_output_without_result(
-                422,
-                "Input file is invalid",
-                log_id=log_id,
+                422, "Invalid input file", log_id=log_id
             )
 
         return images, data_info, visualize_enabled
 
     def _postprocess(self, images, data_info, visualize_enabled, preds, log_id, input):
-        if input.restructurePages:
-            preds = self.pipeline.restructure_pages(
-                preds,
-                merge_tables=input.mergeTables,
-                relevel_titles=input.relevelTitles,
-                concatenate_pages=False,
-            )
-            preds = list(preds)
-        layout_parsing_results: List[Dict[str, Any]] = []
-        for i, (img, item) in enumerate(zip(images, preds)):
-            pruned_res = app_common.prune_result(item.json["res"])
-            # XXX
-            md_data = item._to_markdown(
-                pretty=input.prettifyMarkdown,
-                show_formula_number=input.showFormulaNumber,
-            )
-            md_text = md_data["markdown_texts"]
-            if input.returnMarkdownImages:
-                md_imgs = app_common.postprocess_images(
-                    md_data["markdown_images"],
-                    log_id,
-                    filename_template=f"markdown_{i}/{{key}}",
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                    max_img_size=self.context["max_output_img_size"],
-                )
-            else:
-                md_imgs = None
-            if visualize_enabled:
-                imgs = {
-                    "input_img": img,
-                    **item.img,
-                }
-                imgs = app_common.postprocess_images(
-                    imgs,
-                    log_id,
-                    filename_template=f"{{key}}_{i}.jpg",
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                    max_img_size=self.context["max_output_img_size"],
-                )
-            else:
-                imgs = {}
-            entry = dict(
-                prunedResult=pruned_res,
-                markdown=dict(
-                    text=md_text,
-                    images=md_imgs,
-                ),
-                outputImages=(
-                    {k: v for k, v in imgs.items() if k != "input_img"}
-                    if imgs
-                    else None
-                ),
-                inputImage=imgs.get("input_img"),
-            )
-            if app_common.normalize_output_formats(input.outputFormats):
-                entry["exports"] = app_common.build_pipeline_exports(
-                    input.outputFormats,
-                    item,
-                    log_id=log_id,
-                    file_storage=self.context["file_storage"],
-                    return_urls=self.context["return_urls"],
-                    url_expires_in=self.context["url_expires_in"],
-                )
-            layout_parsing_results.append(entry)
-
-        return schemas.paddleocr_vl.InferResult(
-            layoutParsingResults=layout_parsing_results,
-            dataInfo=data_info,
+        return build_infer_result(
+            self.pipeline,
+            input,
+            images,
+            data_info,
+            preds,
+            log_id=log_id,
+            visualize=visualize_enabled,
+            file_storage=self.context["file_storage"],
+            return_urls=self.context["return_urls"],
+            url_expires_in=self.context["url_expires_in"],
+            max_output_img_size=self.context["max_output_img_size"],
         )

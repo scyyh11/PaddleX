@@ -1429,7 +1429,7 @@ INFO:     Uvicorn running on http://0.0.0.0:8080 (Press CTRL+C to quit)
 <tr>
 <td><code>markdownImages</code></td>
 <td><code>object</code>|<code>null</code></td>
-<td>对应<code>infer</code>操作返回的<code>markdown</code>对象的<code>images</code>属性。</td>
+<td>对应<code>infer</code>操作返回的<code>markdown</code>对象的<code>images</code>属性。 请求导出 DOCX 时，图片值须为 Base64 或 Base64 data URL。如果 <code>infer</code> 返回的是图片 URL，请先在客户端获取图片并转为 Base64。</td>
 </tr>
 </tbody>
 </table>
