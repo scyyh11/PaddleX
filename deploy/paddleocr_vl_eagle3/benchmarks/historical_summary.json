@@ -1,0 +1,37 @@
+{
+  "record_type": "Historical measurements before source packaging; not rerun for this export",
+  "hardware": "NVIDIA A100 80GB PCIe",
+  "runtime": "vLLM 0.32.0, PyTorch 2.13.0+cu130, Transformers 5.19.0",
+  "exported_service_profile": {
+    "pipeline": "Native vision processing + EAGLE3 K4 + draft INT8 top-1 + synchronous FULL_DECODE_ONLY graphs",
+    "target": "PaddleOCR-VL-1.6 BF16",
+    "layout": "PP-DocLayoutV3",
+    "page_comparison": {
+      "pages": 2,
+      "timed_repeats": 3,
+      "warmup_per_page": 1,
+      "stock_two_pages_seconds": 4.1487669313404085,
+      "eagle_two_pages_seconds": 2.9097193503403105,
+      "speedup": 1.4258306151949616,
+      "exact_crop_requests": 144,
+      "total_crop_requests": 144,
+      "exact_page_pairs": 8,
+      "scope": "Layout and VLM share one A100 per arm. Includes local HTTP, layout, VLM, Markdown and JSON; excludes model startup, platform download and result reporting. The two arms used separate same-model A100s."
+    }
+  },
+  "historical_research_crop_profile": {
+    "included_in_export": false,
+    "reason": "Also used experimental preprocessing/vision/grouped-loop optimizations; its speed must not be attributed to the exported HTTP service.",
+    "confirmation128": {
+      "images": 128,
+      "documents": 97,
+      "requests": 384,
+      "exact_requests": 384,
+      "output_tokens_per_pass": 26716
+    },
+    "confirmation128_speedup": 2.424480903557407,
+    "legacy24_speedup": 1.928688854022882,
+    "scope": "Warm single-crop, batch=1, end-to-end on one A100 using greedy decoding. Layout, page postprocessing, network, image disk I/O and engine startup excluded."
+  },
+  "claims_limit": "These measurements do not establish 2x full-page performance or exact equivalence for all future inputs/hardware."
+}
