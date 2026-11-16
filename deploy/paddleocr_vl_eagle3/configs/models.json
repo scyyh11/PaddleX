@@ -1,0 +1,27 @@
+{
+  "target": {
+    "repo_id": "PaddlePaddle/PaddleOCR-VL-1.6",
+    "revision": "c5630abae1d940eafe0697512a0325494b02ab42",
+    "directory": "models/PaddleOCR-VL-1.6",
+    "sha256": {
+      "chat_template.jinja": "2f27812dab7f333e471884e0c803d807f11953d5453140dfb1aaba234f872bc8",
+      "config.json": "ce7f4565f8b1db78532ad5d1b9ebe55c2139d49bd4cb04778b580a08a598f171",
+      "model.safetensors": "85a479d506a11e724e7285d395c551be69f41dbc16b6342d3cacfb189aed71db",
+      "preprocessor_config.json": "111872ab1e8bb7fd040ac5087bfced7ab8f011f02139b088cba294964c3b1d0e",
+      "tokenizer.json": "c8a215a59183d0d0781adc33bacd3ce6162716f7fd568fb30234a74d69803a7d"
+    }
+  },
+  "draft": {
+    "directory": "models/PaddleOCR-VL-1.6-EAGLE3-K4-dense",
+    "distribution": "Local checkpoint; weights are not included or uploaded by this source export.",
+    "sha256": {
+      "model.safetensors": "b7f5dc74168e594eea4c7d961c4c95e7f9c730adbd058f76d20ea48275a4157d",
+      "config.json": "a460492a86f5b707cc66e1bd22b3e4423a4ac42b7b71768ab6ed3651cd08c625"
+    }
+  },
+  "layout": {
+    "name": "PP-DocLayoutV3",
+    "directory": "models/hps_layout/PP-DocLayoutV3_infer",
+    "distribution": "Obtain separately under the official model license."
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "original_source_sha256": {
+    "continue_eagle_v16_clean.py": "d33babd2223ff8f5431cc16d0e27918f055501a281abc7b6929a14b628e065e1",
+    "train_eagle_v16_clean.py": "4e3ca3fef99d4ddccd9b167dad8ead7152fd27e17053269b24a190be3cce7911",
+    "train_eagle_v16.py": "62de14203fbdf3aefd1b539228929292373923e34c75c6ec398496045bad558e",
+    "draft_model.py": "4d67be36c5cee5fcb2f3eb55f37234e40dacf851ee1570d29b14a5995a7cb441",
+    "round3_dflash_train.py": "b7edafb1868f74072368f208c5dbcd7b1dbf392542e7579c29ecf31ae47106ae",
+    "round3_eagle_model.py": "4b6cb2c909720301c825df80ac44f31da498310b35fdcc7a188db6e472869872",
+    "native_dflash_model.py": "0aed2d824cea2f46e2f0d88649a31f921e192eb3ddc2b9fcdd5133b942fa4e05",
+    "v16_capture.py": "180d82e0694157f96b321e5397ffd2af7efc6a35eb77c26c85f118915d32b514",
+    "round3_feature_worker.py": "66a57fc35d2ed43895ca33420f7a128fdaae2d4ae0c1f125020d399e69874ee9",
+    "v16_merge_feature_corpora.py": "4e8c6f723f2c3b415a4ba089702349a7838231767248642a0cc6de46678093f6"
+  },
+  "export_changes": [
+    "Extract only EAGLE3 model and shared training utilities; exclude legacy DFlash trainers.",
+    "Make GPU selection and data/checkpoint paths portable.",
+    "Capture only training/validation manifest by default; holdout capture is explicit.",
+    "Retain pinned VL-1.6 checkpoint validation, split audits, train-only vocabulary selection, recurrence and checkpoint selection math.",
+    "Source hashes recorded by training refer to these exported files.",
+    "Reuse clean SOURCES in continuation so approved Python documentation inputs remain valid across training stages."
+  ],
+  "training_math_changed": false
+}

@@ -1,0 +1,13 @@
+# Install in a separate Python 3.12 environment from the vLLM backend.
+# These versions are the historical full-page evaluation environment.
+# Obtain a CUDA-compatible PaddlePaddle GPU wheel for your host as documented
+# by PaddlePaddle if the default package index does not provide one.
+paddlepaddle-gpu==3.3.0
+paddlex[ocr]==3.6.0
+numpy==1.26.4
+opencv-contrib-python==4.10.0.84
+Pillow==13.0.0
+httpx==0.28.1
+requests==2.34.2
+websockets==17.3
+openai==3.46.0

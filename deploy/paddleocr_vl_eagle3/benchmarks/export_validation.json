@@ -1,0 +1,44 @@
+{
+  "scope": "Source export validation, with no GPU inference or full training rerun",
+  "cpu_http_tests": {
+    "run": 17,
+    "passed": 17,
+    "groups": {
+      "runtime_configuration": 5,
+      "http_api": 3,
+      "page_recovery_and_registration": 9
+    }
+  },
+  "separate_layout_environment": {
+    "page_tests_run": 9,
+    "passed": 9,
+    "additional_distinct_tests": 0
+  },
+  "training_validation": "../training/export_validation.json",
+  "static_checks": {
+    "compileall": "passed",
+    "runtime_and_client_cli_help": "passed",
+    "training_cli_help": "passed",
+    "bash_syntax": "passed",
+    "apache_license_headers": "passed",
+    "black_24_4_2": "passed",
+    "flake8_7_0_0_selected_rules": "passed",
+    "source_dependency_closure": "reviewed"
+  },
+  "review_fixes": [
+    "Continuation uses the same initial-corpus source allowlist as clean training.",
+    "Target and draft environment paths consistently expand a user-home prefix."
+  ],
+  "excluded_artifacts": [
+    "model weights",
+    "datasets",
+    "teacher features",
+    "runtime caches",
+    "private platform records",
+    "credentials"
+  ],
+  "gpu_regression_reexecuted": false,
+  "gpu_limitation": "Available A100 GPUs were occupied by existing workloads; they were left running.",
+  "performance_evidence": "historical_summary.json",
+  "performance_note": "Historical measurements precede the portable export; they are not a fresh benchmark of this branch."
+}

@@ -1,0 +1,18 @@
+{
+  "scope": "Export validation only; no GPU execution or training",
+  "python_files": 7,
+  "checks": [
+    "Python AST/compileall passed",
+    "All seven modules imported on CPU",
+    "Clean/continuation/capture/merge --help passed",
+    "retrain.sh bash -n passed",
+    "Original and exported EAGLE3 initial weights exactly equal with seed 17",
+    "Original and exported CPU final/pre-normalized forward states exactly equal on 4-token input",
+    "Clean and continuation share the same SOURCES object",
+    "All four approved sources including Python docs accepted by both source-validation paths",
+    "Continuation rejects a non-allowlisted initial source",
+    "common.Eagle3 explicitly re-exports the model class"
+  ],
+  "trainable_parameters": 13635584,
+  "original_training_runs_reexecuted": false
+}
