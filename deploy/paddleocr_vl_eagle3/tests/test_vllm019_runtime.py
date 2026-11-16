@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import runtime_config as runtime
 import serve_ocr
 from serve_hps_vlm import parse_args
+from vllm019_packed_attention import LIBRARY_ENV, SOURCE_NAMES as PACKED_SOURCES
 
 
 class Vllm019ConfigurationTests(unittest.TestCase):
@@ -71,7 +72,9 @@ class Vllm019ConfigurationTests(unittest.TestCase):
                 self.assertEqual(spec["method"], "eagle3")
                 self.assertEqual(spec["num_speculative_tokens"], 4)
                 self.assertEqual(config["worker_extension_cls"], expected_worker)
-                self.assertFalse(config["async_scheduling"])
+                self.assertEqual(config["async_scheduling"], graph_mode == "int8")
+                if graph_mode == "int8":
+                    self.assertEqual(config["max_num_seqs"], 1)
                 self.assertEqual(config["dtype"], "bfloat16")
                 self.assertEqual(
                     spec["use_local_argmax_reduction"], graph_mode == "int8"
@@ -91,29 +94,61 @@ class Vllm019ConfigurationTests(unittest.TestCase):
     def test_environment_selects_v1_runner_and_hashes_019_sources(self):
         scripts = self.root / "scripts"
         scripts.mkdir()
-        for name in runtime.RUNTIME_SOURCES + (
-            "vllm019_model.py",
-            "hps_vllm019_worker.py",
-            "hps_vllm019_int8_worker.py",
-            "vllm019_ar1_attention.py",
+        for name in (
+            runtime.RUNTIME_SOURCES
+            + (
+                "vllm019_model.py",
+                "hps_vllm019_worker.py",
+                "hps_vllm019_int8_worker.py",
+                "vllm019_ar1_attention.py",
+                "vllm019_draft_loop.py",
+                "vllm019_draft_full_graph.py",
+                "vllm019_draft_graph_buckets.py",
+                "vllm019_draft_staging.py",
+                "vllm019_attention_metadata.py",
+                "vllm019_greedy_sampler.py",
+                "vllm019_spec_metadata.py",
+                "vllm019_image_lut.py",
+                "vllm019_locked_lt.py",
+                "vllm019_target_linear.py",
+                "vllm019_stable_argmax.py",
+                "vllm019_graph_argmax.py",
+                "vllm019_sampler_graph.py",
+                "vllm019_vision_scalar.py",
+            )
+            + PACKED_SOURCES
         ):
-            (scripts / name).write_text("# fixture\n")
+            path = scripts / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("# fixture\n")
         config, args, _ = serve_ocr.build_engine_config(self.args())
         with patch.object(runtime, "ROOT", self.root), patch.dict(
-            os.environ, {"VLLM_USE_V2_MODEL_RUNNER": "1"}, clear=True
+            os.environ,
+            {"VLLM_USE_V2_MODEL_RUNNER": "1", LIBRARY_ENV: "stale.so"},
+            clear=True,
         ):
             first = runtime.configure_environment(args, config)
             self.assertEqual(os.environ["VLLM_USE_V2_MODEL_RUNNER"], "0")
             self.assertEqual(os.environ["VLLM_WORKER_MULTIPROC_METHOD"], "spawn")
+            self.assertNotIn(LIBRARY_ENV, os.environ)
             basis = first["cache_identity"]["basis"]
             self.assertEqual(basis["runtime_package_versions"], self.versions)
-            self.assertIn("vllm019_model.py", basis["current_dependency_sha256"])
-            (scripts / "vllm019_model.py").write_text("# changed adapter\n")
-            second = runtime.configure_environment(args, config)
-            self.assertNotEqual(
-                first["cache_identity"]["fingerprint"],
-                second["cache_identity"]["fingerprint"],
-            )
+            previous = first
+            for name in (
+                "vllm019_model.py",
+                "vllm019_locked_lt.py",
+                "vllm019_target_linear.py",
+                *PACKED_SOURCES,
+            ):
+                with self.subTest(source=name):
+                    self.assertIn(name, basis["current_dependency_sha256"])
+                    (scripts / name).write_text("# changed adapter\n")
+                    changed = runtime.configure_environment(args, config)
+                    self.assertNotEqual(
+                        previous["cache_identity"]["fingerprint"],
+                        changed["cache_identity"]["fingerprint"],
+                    )
+                    previous = changed
             self.versions["torch"] = "2.13.0+cu130"
             with self.assertRaisesRegex(RuntimeError, "Unvalidated runtime versions"):
                 runtime.configure_environment(args, config)

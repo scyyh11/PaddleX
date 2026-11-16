@@ -42,11 +42,22 @@ class Vllm019WorkerTests(unittest.TestCase):
     def setUp(self):
         self.plans = {42: {"private_vocab_size": 40000, "target_vocab_size": 103424}}
         self.ar1_installs = []
+        self.linear_installs = []
+        self.linear_metadata = {
+            "installed": True,
+            "persistent_plans": 73,
+            "prepared_query_shapes": 292,
+            "workspace_bytes": 4096,
+        }
         modules = {
             "vllm019_model": SimpleNamespace(install=lambda: None),
             "vllm019_ar1_attention": SimpleNamespace(
                 install=lambda: self.ar1_installs.append(True),
                 COUNTS={"row_calls": 36, "fallback_calls": 18},
+            ),
+            "vllm019_target_linear": SimpleNamespace(
+                install=lambda: self.linear_installs.append(True),
+                metadata=lambda: dict(self.linear_metadata),
             ),
             "vllm.compilation.cuda_graph": SimpleNamespace(
                 CUDAGraphWrapper=GraphWrapper
@@ -56,6 +67,20 @@ class Vllm019WorkerTests(unittest.TestCase):
                 metadata=lambda: {"plans": len(self.plans), "top1_dispatches": {}},
             ),
             "round3_eagle_fused_int8_head": SimpleNamespace(PLANS=self.plans),
+            "vllm019_draft_graph_buckets": SimpleNamespace(
+                install=lambda: None, metadata=lambda proposer: {"scope": "test"}
+            ),
+            "vllm019_greedy_sampler": SimpleNamespace(install=lambda: None, COUNTS={}),
+            "vllm019_spec_metadata": SimpleNamespace(install=lambda: None, COUNTS={}),
+            "vllm019_draft_staging": SimpleNamespace(
+                install=lambda: None, metadata=lambda: {}
+            ),
+            "vllm019_sampler_graph": SimpleNamespace(
+                install=lambda: None, metadata=lambda: {}
+            ),
+            "vllm019_vision_scalar": SimpleNamespace(
+                install=lambda: None, metadata=lambda: {}
+            ),
         }
         with patch.dict(sys.modules, modules):
             self.base = load("hps_vllm019_worker")
@@ -106,13 +131,21 @@ class Vllm019WorkerTests(unittest.TestCase):
 
     def test_bf16_and_int8_share_the_target_attention_compatibility_path(self):
         self.assertEqual(self.ar1_installs, [True])
+        self.assertEqual(self.linear_installs, [True])
         for cls in (self.base.Vllm019EagleWorker, self.int8.Vllm019Int8Worker):
             result = self.worker(cls).hps_eagle_metadata()
             self.assertEqual(
-                result["runtime_profile"], "vllm-0.19.0-ar1-attention-target"
+                result["runtime_profile"],
+                (
+                    "vllm-0.19.0-eagle3-bucketed"
+                    if cls is self.int8.Vllm019Int8Worker
+                    else "vllm-0.19.0-ar1-attention-target"
+                ),
             )
             self.assertEqual(result["ar1_attention_startup"]["row_calls"], 36)
             self.assertIn("native FA2 AR1 row batch", result["target_attention"])
+            self.assertEqual(result["target_linear"], self.linear_metadata)
+            self.assertIn("CUDA12 native-Q1 BF16", result["target_projection"])
 
     def test_missing_or_wrong_head_plan_is_rejected(self):
         worker = self.worker(self.int8.Vllm019Int8Worker)

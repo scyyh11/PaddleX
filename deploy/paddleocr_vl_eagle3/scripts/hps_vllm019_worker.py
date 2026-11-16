@@ -14,17 +14,32 @@
 
 """EAGLE3 worker contract for vLLM 0.19.0's V1 EagleProposer.
 
-The target keeps native BF16 linear layers and native FA2 AR1 query rows for
-small verification blocks. A100 80GB/108-SM devices batch these rows with the
-original AR1 split count; other devices use per-query calls. CUDA 13 cuBLASLt
-recipes and FA4 hooks are not used. Regressions compare against a 0.19 baseline.
+The target keeps BF16 weights, with verified CUDA12 native-Q1 linear plans for
+small verification blocks and FA2 AR1 query endpoints/split counts. The optional
+finite-QKV packed kernel is admitted separately. This worker requires the pinned
+A100 80GB/108-SM profile; CUDA13 recipes and FA4 hooks are not used.
+Regressions compare against the same vLLM 0.19 autoregressive baseline.
 """
+import os
+
 from vllm019_model import install
 from vllm.compilation.cuda_graph import CUDAGraphWrapper
 from vllm019_ar1_attention import COUNTS, install as install_ar1_attention
+from vllm019_target_linear import (
+    install as install_target_linear,
+    metadata as target_linear_metadata,
+)
+from vllm019_packed_attention import (
+    LIBRARY_ENV,
+    install as install_packed_attention,
+    metadata as packed_attention_metadata,
+)
 
 install()
 install_ar1_attention()
+install_target_linear()
+if os.environ.get(LIBRARY_ENV):
+    install_packed_attention()
 
 
 class Vllm019EagleWorker:
@@ -54,13 +69,22 @@ class Vllm019EagleWorker:
             "cudagraph_mode": config.compilation_config.cudagraph_mode.name,
             "draft_cudagraph_mode": proposer.cudagraph_dispatcher.cudagraph_mode.name,
             "capture_sizes": config.compilation_config.cudagraph_capture_sizes,
-            "target_projection": "native vLLM 0.19.0 BF16",
+            "target_projection": "CUDA12 native-Q1 BF16 recipes for marked target Q2..5",
+            "target_linear": target_linear_metadata(),
             "target_attention": "native FA2 AR1 row batch with per-query fallback",
+            "attention_metadata": "fused exact integer causal endpoints and page tables",
             "attention_row_batch_device": "A100 80GB, SM80, 108 SMs",
             "ar1_attention_startup": dict(COUNTS),
             "attention_counter_scope": "Python initialization/capture calls, not graph replay counts",
             "cuda13_locked_kernels": False,
         }
+        packed = packed_attention_metadata()
+        data["packed_attention"] = packed
+        if packed["enabled"]:
+            data["target_attention"] = (
+                "opt-in finite-QKV packed FA2 with original exact AR1 fallback; "
+                "see packed_attention counts for startup/capture usage"
+            )
         expected = {
             "method": "eagle3",
             "speculator": "EagleProposer",
@@ -69,7 +93,6 @@ class Vllm019EagleWorker:
             "draft_head_dtype": "torch.bfloat16",
             "k": 4,
             "aux_layers": [4, 10, 16],
-            "async_scheduling": False,
         }
         if (
             not all(data[key] == value for key, value in expected.items())
@@ -82,6 +105,7 @@ class Vllm019EagleWorker:
                 else "NONE"
             )
             or data["draft_position_embeddings"] < data["max_model_len"]
+            or (data["async_scheduling"] and data["max_num_seqs"] != 1)
         ):
             raise RuntimeError(f"Unexpected vLLM 0.19.0 EAGLE3 worker: {data}")
         return data

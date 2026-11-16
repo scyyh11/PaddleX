@@ -14,9 +14,9 @@
 
 """Portable configuration for the frozen VL-1.6 EAGLE3 service.
 
-This replaces the development CLI's dependency on experiment manifests and
-precompiled benchmark binaries. The service continues to use vLLM's native
-image processor and the same decode-only CUDA graph worker.
+The service selects a validated worker and graph configuration for each pinned
+runtime. Source, dependency, model and optional packed-kernel identities are
+included in the cache fingerprint; development experiment manifests are unused.
 """
 from __future__ import annotations
 
@@ -145,13 +145,42 @@ def configure_environment(args, config):
         raise RuntimeError(
             f"Unvalidated runtime versions (expected, actual): {mismatches}"
         )
+    from vllm019_packed_attention import (
+        LIBRARY_ENV,
+        SOURCE_NAMES as PACKED_SOURCES,
+        validate_configuration,
+        verify_artifact,
+    )
+
+    validate_configuration(args, config, version=versions["vllm"])
+    packed_path = getattr(args, "vllm019_packed_attention_library", None)
+    packed_artifact = (
+        verify_artifact(packed_path, bundle_root=ROOT / "kernels/fa2_sm80")
+        if packed_path is not None
+        else None
+    )
     source_names = RUNTIME_SOURCES + (
         (
             "vllm019_model.py",
             "hps_vllm019_worker.py",
             "hps_vllm019_int8_worker.py",
             "vllm019_ar1_attention.py",
+            "vllm019_draft_loop.py",
+            "vllm019_draft_full_graph.py",
+            "vllm019_draft_graph_buckets.py",
+            "vllm019_draft_staging.py",
+            "vllm019_attention_metadata.py",
+            "vllm019_greedy_sampler.py",
+            "vllm019_spec_metadata.py",
+            "vllm019_image_lut.py",
+            "vllm019_locked_lt.py",
+            "vllm019_target_linear.py",
+            "vllm019_stable_argmax.py",
+            "vllm019_graph_argmax.py",
+            "vllm019_sampler_graph.py",
+            "vllm019_vision_scalar.py",
         )
+        + PACKED_SOURCES
         if legacy
         else ()
     )
@@ -164,6 +193,8 @@ def configure_environment(args, config):
         runtime_package_versions=versions,
         current_dependency_sha256=sources,
     )
+    if packed_artifact is not None:
+        basis["packed_attention"] = packed_artifact
     fingerprint = hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
     cache = (
         getattr(args, "cache_root", None) or ROOT / "runtime_cache" / fingerprint[:20]
@@ -178,6 +209,11 @@ def configure_environment(args, config):
         VLLM_PLUGINS="",
         VLLM_USE_V2_MODEL_RUNNER="0" if legacy else "1",
     )
+    # A stale environment variable must never enable an opt-in kernel.
+    if packed_artifact is None:
+        os.environ.pop(LIBRARY_ENV, None)
+    else:
+        os.environ[LIBRARY_ENV] = packed_artifact["library"]
     scripts = str(ROOT / "scripts")
     search_paths = [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
     os.environ["PYTHONPATH"] = os.pathsep.join(

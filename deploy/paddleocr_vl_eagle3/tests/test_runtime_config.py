@@ -54,7 +54,7 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertEqual(config["tensor_parallel_size"], 1)
         self.assertEqual(config["speculative_config"]["num_speculative_tokens"], 4)
         self.assertTrue(config["speculative_config"]["use_local_argmax_reduction"])
-        self.assertFalse(config["async_scheduling"])
+        self.assertEqual(config["async_scheduling"], runtime.is_vllm019())
         self.assertFalse(config["enable_prefix_caching"])
         self.assertEqual(
             config["compilation_config"]["cudagraph_mode"],

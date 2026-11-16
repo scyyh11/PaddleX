@@ -338,12 +338,15 @@ def build_engine_config(args):
         # Full pixel budget gives at most 3600 visual tokens, plus the template.
         config["max_model_len"] = 4096 + max_output
     if recovery:
-        # Match the compiled target arithmetic but avoid graph capture/replay
-        # and async lookahead. The HTTP service admits one generation at a time.
+        # Start from the synchronous recovery configuration, then select the
+        # validated version-specific graph/scheduling profile below. HTTP still
+        # admits one active generation at a time.
         config.update(
             async_scheduling=False,
             compilation_config={"mode": 3, "cudagraph_mode": "NONE"},
         )
+        if is_vllm019() and decode_graphs == "int8":
+            config.update(async_scheduling=True, max_num_seqs=1)
         config.pop("max_cudagraph_capture_size")
         config["speculative_config"].update(
             enforce_eager=False, use_local_argmax_reduction=False
@@ -358,6 +361,9 @@ def build_engine_config(args):
             config["speculative_config"]["use_local_argmax_reduction"] = (
                 decode_graphs == "int8"
             )
+    from vllm019_packed_attention import validate_configuration
+
+    validate_configuration(args, config, version="0.19.0" if is_vllm019() else "0.32.0")
     identity_config = config
     if decode_graphs:
         # The optional INT8 worker imports the same graph attention implementation
@@ -404,8 +410,10 @@ def create_app(args) -> FastAPI:
 
         if is_vllm019() and recovery:
             from vllm019_model import install
+            from vllm019_image_lut import install as install_image_lut
 
             install()
+            install_image_lut(args.model)
 
         engine = AsyncLLM.from_engine_args(
             AsyncEngineArgs(**config), usage_context=UsageContext.LLM_CLASS
@@ -472,6 +480,10 @@ def create_app(args) -> FastAPI:
         except Exception as exc:
             raise HTTPException(503, "Inference engine unavailable") from exc
         evidence = {}
+        if is_vllm019() and args.mode == RECOVERY_MODE:
+            from vllm019_image_lut import metadata as image_lut_metadata
+
+            evidence["image_preprocessing"] = image_lut_metadata()
         if getattr(args, "model", None) is not None:
             evidence["model_path"] = str(args.model.resolve())
             evidence["draft_model_path"] = (

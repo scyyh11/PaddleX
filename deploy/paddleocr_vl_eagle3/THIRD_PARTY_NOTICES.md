@@ -1,5 +1,22 @@
 # Third-party notices
 
+The optional packed attention build under `kernels/fa2_sm80/` uses pinned
+FlashAttention and CUTLASS sources and PyTorch headers. Its
+[NOTICE](kernels/fa2_sm80/NOTICE.md) and [license directory](kernels/fa2_sm80/LICENSES)
+retain upstream attribution and redistribution terms. The build copies these
+notices alongside the shared library; they must accompany binary distribution.
+
+The draft graph adapters (`scripts/vllm019_draft_loop.py`,
+`vllm019_draft_full_graph.py`, and `vllm019_draft_graph_buckets.py`) adapt the
+input preparation and autoregressive recurrence of vLLM's
+[`vllm/v1/spec_decode/eagle.py`](https://github.com/vllm-project/vllm/blob/v0.19.0/vllm/v1/spec_decode/eagle.py).
+The speculative metadata and greedy selection adapters preserve the contracts
+of that release's GPU model runner and rejection sampler.
+Copyright contributors to the vLLM project; licensed under Apache-2.0.
+The adaptations add guarded CUDA graph capture, integer metadata fusion and
+fixed-shape index reuse. The Apache-2.0 license is included in this repository's
+root `LICENSE` file.
+
 `scripts/vllm019_ar1_attention.py::ar1_num_splits` adapts the split heuristic from
 FlashAttention commit `29210221863736a08f71a866459e368ad1ac4a95`,
 [`csrc/flash_attn/flash_api.cpp`](https://github.com/vllm-project/flash-attention/blob/29210221863736a08f71a866459e368ad1ac4a95/csrc/flash_attn/flash_api.cpp).

@@ -18,7 +18,8 @@ Small single-request verification blocks follow the native one-query FA2 path
 and split heuristic. On the validated A100 80GB/108-SM device these independent
 rows share one native FA2 call with the original AR1 split count; other devices
 use separate native calls. Unmatched attention inputs retain the upstream path.
-Target linear layers are unchanged; token equality is not guaranteed for all inputs.
+This module only adapts attention. The worker separately installs the validated
+target linear plans; finite regression tests do not prove all-input token equality.
 """
 import importlib.metadata
 import math
@@ -89,12 +90,20 @@ def _batched_attention(kw, output, kernel=None):
             torch.zeros(count + 1, device=q.device, dtype=cu.dtype),
         )
     row_cu, dummy_cu = _BATCH_CU[key]
-    rows = row_cu[:-1]
-    start, end, lengths = cu[:1], cu[1:2], kw["seqused_k"]
-    valid = (rows >= start) & (rows < end) & (lengths > 0)
-    endpoints = (lengths - end + rows + 1).clamp_min(0)
-    endpoints = torch.where(valid, endpoints, 0)
-    tables = torch.where(valid[:, None], kw["block_table"].expand(count, -1), 0)
+    if cu.is_cuda:
+        from vllm019_attention_metadata import build_ar1_metadata
+
+        endpoints, tables = build_ar1_metadata(
+            cu, kw["seqused_k"], kw["block_table"], count
+        )
+    else:
+        # CPU reference remains available for native-call contract tests.
+        rows = row_cu[:-1]
+        start, end, lengths = cu[:1], cu[1:2], kw["seqused_k"]
+        valid = (rows >= start) & (rows < end) & (lengths > 0)
+        endpoints = (lengths - end + rows + 1).clamp_min(0)
+        endpoints = torch.where(valid, endpoints, 0)
+        tables = torch.where(valid[:, None], kw["block_table"].expand(count, -1), 0)
     splits = ar1_num_splits(kw["max_seqlen_k"], 108)
     scale = kw.get("softmax_scale")
     if scale is None:

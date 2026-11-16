@@ -16,8 +16,38 @@
 from hps_vllm019_worker import Vllm019EagleWorker
 from round3_eagle_fused_int8_top1 import install, metadata
 from round3_eagle_fused_int8_head import PLANS
+from vllm019_draft_graph_buckets import (
+    install as install_draft_loop,
+    metadata as draft_loop_metadata,
+)
+from vllm019_greedy_sampler import (
+    install as install_greedy_sampler,
+    COUNTS as SAMPLER_COUNTS,
+)
+from vllm019_spec_metadata import (
+    install as install_spec_metadata,
+    COUNTS as SPEC_METADATA_COUNTS,
+)
+from vllm019_draft_staging import (
+    install as install_draft_staging,
+    metadata as staging_metadata,
+)
+from vllm019_sampler_graph import (
+    install as install_sampler_graph,
+    metadata as sampler_graph_metadata,
+)
+from vllm019_vision_scalar import (
+    install as install_vision_scalar,
+    metadata as vision_scalar_metadata,
+)
 
 install()
+install_draft_loop()
+install_greedy_sampler()
+install_spec_metadata()
+install_draft_staging()
+install_sampler_graph()
+install_vision_scalar()
 
 
 class Vllm019Int8Worker(Vllm019EagleWorker):
@@ -35,12 +65,23 @@ class Vllm019Int8Worker(Vllm019EagleWorker):
             or plan["target_vocab_size"] != model.config.vocab_size
         ):
             raise RuntimeError("vLLM 0.19.0 private INT8 draft head was not prepared")
-        # In 0.19 dummy_run captures draft.forward only. The top-1 call happens
-        # in the proposer outside that graph, so zero startup dispatches is valid.
+        # Native dummy_run captures forward only. Our complete proposal graphs
+        # capture top-1 too, lazily on real decode, so startup counts can be zero.
         data.update(
+            runtime_profile="vllm-0.19.0-eagle3-bucketed",
             draft_head_execution="int8 top-1",
             draft_head_prepared=True,
             draft_top1_in_forward_graph=False,
+            draft_top1_in_proposal_graph=True,
             draft_head_startup=metadata(),
+            draft_loop=draft_loop_metadata(proposer),
+            draft_execution="complete Q5 proposal graphs with context buckets and guarded fallbacks",
+            target_sampler="FP32 stable argmax graph and strict greedy integer selection with upstream fallback",
+            spec_metadata="fixed B1 K4 Q5 GPU indices with upstream fallback",
+            target_sampler_calls=dict(SAMPLER_COUNTS),
+            spec_metadata_calls=dict(SPEC_METADATA_COUNTS),
+            draft_staging=staging_metadata(),
+            target_argmax=sampler_graph_metadata(),
+            vision_scalar=vision_scalar_metadata(),
         )
         return data
