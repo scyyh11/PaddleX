@@ -49,6 +49,14 @@ PINNED_VERSIONS = {
     "triton": "3.7.1",
     "nvidia-cublas": "13.1.1.3",
 }
+PINNED_VERSIONS_019 = {
+    "vllm": "0.19.0",
+    "torch": "2.10.0",
+    "transformers": "4.57.6",
+    "triton": "3.6.0",
+    "nvidia-cublas-cu12": "12.8.4.1",
+    "pydantic": "2.14.3",
+}
 RUNTIME_SOURCES = (
     "runtime_config.py",
     "serve_ocr.py",
@@ -64,6 +72,17 @@ RUNTIME_SOURCES = (
     "hps_decode_graph_eagle_worker.py",
     "hps_decode_graph_int8_worker.py",
 )
+
+
+def runtime_version():
+    version = importlib.metadata.version("vllm")
+    if version not in ("0.19.0", "0.32.0"):
+        raise RuntimeError(f"Unsupported vLLM runtime: {version}")
+    return version
+
+
+def is_vllm019():
+    return runtime_version() == "0.19.0"
 
 
 def engine_config(args):
@@ -84,18 +103,19 @@ def engine_config(args):
         max_model_len=4096,
         max_num_seqs=8,
         max_num_batched_tokens=4096,
-        gpu_memory_utilization=0.45,
-        kv_cache_memory_bytes=4294967296,
+        gpu_memory_utilization=getattr(args, "gpu_memory_utilization", 0.45),
+        kv_cache_memory_bytes=getattr(args, "kv_cache_memory_mib", 4096) * 1024 * 1024,
         enable_prefix_caching=False,
         mm_processor_cache_gb=0,
         enforce_eager=False,
         limit_mm_per_prompt={"image": 1},
         disable_log_stats=False,
-        per_request_spec_decode_metrics=(
-            "none" if args.mode == "baseline" else "summary"
-        ),
         max_cudagraph_capture_size=80,
     )
+    if not is_vllm019():
+        config["per_request_spec_decode_metrics"] = (
+            "none" if args.mode == "baseline" else "summary"
+        )
     if args.mode != "baseline":
         config["worker_extension_cls"] = args.worker_extension
         config["speculative_config"] = dict(
@@ -103,27 +123,41 @@ def engine_config(args):
             model=str(args.draft_model.resolve()),
             num_speculative_tokens=args.k,
             use_local_argmax_reduction=True,
-            draft_sample_method="greedy",
-            enable_adaptive_verification=False,
         )
+        if not is_vllm019():
+            config["speculative_config"].update(
+                draft_sample_method="greedy", enable_adaptive_verification=False
+            )
     return config
 
 
 def configure_environment(args, config):
     # This runs before CUDA/vLLM imports, including imports in spawned workers.
-    versions = {name: importlib.metadata.version(name) for name in PINNED_VERSIONS}
+    legacy = is_vllm019()
+    pins = PINNED_VERSIONS_019 if legacy else PINNED_VERSIONS
+    versions = {name: importlib.metadata.version(name) for name in pins}
     mismatches = {
-        name: (PINNED_VERSIONS[name], actual)
+        name: (pins[name], actual)
         for name, actual in versions.items()
-        if actual != PINNED_VERSIONS[name]
+        if actual != pins[name]
     }
     if mismatches:
         raise RuntimeError(
             f"Unvalidated runtime versions (expected, actual): {mismatches}"
         )
+    source_names = RUNTIME_SOURCES + (
+        (
+            "vllm019_model.py",
+            "hps_vllm019_worker.py",
+            "hps_vllm019_int8_worker.py",
+            "vllm019_ar1_attention.py",
+        )
+        if legacy
+        else ()
+    )
     sources = {
         name: hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest()
-        for name in RUNTIME_SOURCES
+        for name in source_names
     }
     basis = dict(
         engine_config=config,
@@ -142,6 +176,7 @@ def configure_environment(args, config):
         VLLM_BATCH_INVARIANT="0",
         VLLM_WORKER_MULTIPROC_METHOD="spawn",
         VLLM_PLUGINS="",
+        VLLM_USE_V2_MODEL_RUNNER="0" if legacy else "1",
     )
     scripts = str(ROOT / "scripts")
     search_paths = [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]

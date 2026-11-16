@@ -7,16 +7,18 @@
 ## 范围与版本
 
 - 目标：官方 **PaddlePaddle/PaddleOCR-VL-1.6**，BF16，greedy；草稿为该版本单独训练的 **EAGLE3 K=4 dense**。
-- 当前服务：原生视觉预处理与编码，EAGLE3 草稿 INT8 top-1，目标 BF16 验证，同步 `FULL_DECODE_ONLY` CUDA Graph。
+- 0.32 服务：原生视觉预处理与编码，EAGLE3 草稿 INT8 top-1，目标 BF16 验证，同步 `FULL_DECODE_ONLY` CUDA Graph。0.19 使用适合旧版草稿执行器的图配置，见下方兼容说明。
 - 整页：官方 PaddleX 1.6 产线，`PP-DocLayoutV3` 检测、裁块，VLM 逐块识别，官方 Markdown/JSON 后处理。
 - 已验证的历史环境：Linux x86-64、Python 3.12、单张 NVIDIA A100 80GB PCIe、vLLM **0.32.0**、PyTorch **2.13.0+cu130**、Transformers **5.19.0**。cuBLASLt 算法也按已验证版本固定，不能仅升级 vLLM 后沿用准确性结论。
-- **0.19.0 / 0.19.1 无法原样运行本目录。** 它们有 EAGLE3 基础接口，但需要移植模型校验、多模态映射和性能补丁。尚未声明其它 vLLM 版本受支持。
+- **0.19.0 使用独立兼容路径**：补齐模型校验、多模态映射与草稿上下文，保留 EAGLE3 K4、INT8 草稿头和 decode CUDA Graph，目标使用该版本的原生 BF16 计算。安装、验证范围和与 0.32 的差异见 [docs/VLLM019.md](docs/VLLM019.md)。未声明 0.19.1 或其它版本受支持。
 
 权重、数据集、教师特征、缓存和平台凭据不在 Git 中。已训练的草稿目前需要从原部署的 checkpoint 单独取得；本目录没有提供它的公开下载地址。
 
 ## 安装与资产
 
 从本分支进入 `deploy/paddleocr_vl_eagle3` 后运行命令。服务端与 PaddleX 客户端使用两个 Python 环境：
+
+精简 Debian/Ubuntu 容器还需为版面环境的 OpenCV 安装系统库：`apt-get update && apt-get install -y libgl1 libglib2.0-0`。
 
 ```bash
 python3.12 -m venv .venv-vllm
@@ -83,7 +85,7 @@ CUDA_VISIBLE_DEVICES=0 .venv-layout/bin/python scripts/benchmark_eagle3_client.p
 - **本服务配置的两页整页测试**：预热后两页耗时 4.149 s → 2.910 s，**1.426×**；144/144 个裁片请求 token 一致，8/8 对整页 Markdown 和 JSON 一致。样本很小，不能代表整份数据集。
 - **另一套历史裁片研究配置**：128 裁片为 **2.424×**，384/384 请求 token 一致；24 裁片为 **1.929×**。它还用了额外视觉/预处理优化，未作为本次服务源码导出，不能把它的加速比当成本服务的整页表现。
 
-这些是整理前的历史测试。本次源码导出执行 CPU、配置、接口和训练模型一致性检查；没有重新运行 GPU 回归或完整训练。详见 [benchmarks/export_validation.json](benchmarks/export_validation.json)。
+以上是 0.32 源码整理前的历史测试。首次 0.32 导出执行 CPU、配置、接口和训练模型一致性检查，未重跑 GPU 回归或完整训练，记录见 [benchmarks/export_validation.json](benchmarks/export_validation.json)。新增 0.19.0 路径的 GPU 对照单独记录在 [benchmarks/vllm019_validation.json](benchmarks/vllm019_validation.json)。
 
 当前整页客户端每个裁片先生成最多 1024 token，遇到 `length` 后对相同输入重试到 8192。仍不结束会使整页失败；重复生成可能触发这一限制。该行为保留，尚未添加异常裁片兜底。无文字页可以正常产生空 Markdown，评测平台需要区分这种结果和推理异常。
 
@@ -97,4 +99,4 @@ CUDA_VISIBLE_DEVICES=0 .venv-layout/bin/python scripts/benchmark_eagle3_client.p
 .venv-layout/bin/python -m unittest discover -s tests -p 'test_benchmark_page*.py' -v
 ```
 
-首次在新环境运行时，应先比较原版与加速端的 token、停止原因和长输出行为，再评估吞吐。权重和数据按各自许可证使用；本目录源码遵循仓库的 Apache-2.0 许可证。
+首次在新环境运行时，应先比较原版与加速端的 token、停止原因和长输出行为，再评估吞吐。权重和数据按各自许可证使用；本目录源码遵循仓库的 Apache-2.0 许可证，派生自 FlashAttention 的 heuristic 另见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

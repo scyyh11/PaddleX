@@ -57,7 +57,8 @@ class RuntimeConfigTests(unittest.TestCase):
         self.assertFalse(config["async_scheduling"])
         self.assertFalse(config["enable_prefix_caching"])
         self.assertEqual(
-            config["compilation_config"]["cudagraph_mode"], "FULL_DECODE_ONLY"
+            config["compilation_config"]["cudagraph_mode"],
+            "FULL_AND_PIECEWISE" if runtime.is_vllm019() else "FULL_DECODE_ONLY",
         )
         self.assertEqual(config["compilation_config"]["cudagraph_capture_sizes"], [5])
 
@@ -114,7 +115,7 @@ class RuntimeConfigTests(unittest.TestCase):
                 first["cache_identity"]["fingerprint"],
                 second["cache_identity"]["fingerprint"],
             )
-            versions["vllm"] = "0.19.0"
+            versions["torch"] = "0.0.0"
             with self.assertRaisesRegex(RuntimeError, "Unvalidated runtime versions"):
                 runtime.configure_environment(worker_args, config)
 

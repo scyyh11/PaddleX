@@ -38,6 +38,7 @@ from runtime_config import (
     PROMPTS,
     configure_environment,
     engine_config,
+    is_vllm019,
     request_for,
 )
 
@@ -145,6 +146,7 @@ class Resident:
     draft_tokens: int = 0
     accepted_draft_tokens: int = 0
     verification_steps: int = 0
+    request_metrics_available: bool = True
 
     async def recognize(
         self,
@@ -155,8 +157,16 @@ class Resident:
         mm_processor_kwargs=None,
         pixel_limit=PIXEL_LIMIT,
     ) -> dict:
-        from vllm.exceptions import GracefulHTTPError, VLLMClientError
         from vllm.v1.engine.exceptions import EngineDeadError
+
+        if is_vllm019():
+            client_errors = (ValueError,)
+            graceful_errors = ()
+        else:
+            from vllm.exceptions import GracefulHTTPError, VLLMClientError
+
+            client_errors = (VLLMClientError,)
+            graceful_errors = (GracefulHTTPError,)
 
         picture = await asyncio.to_thread(decode_image, data, pixel_limit)
         try:
@@ -177,7 +187,7 @@ class Resident:
             output = result.outputs[0]
             if (
                 self.recovery_worker is not None
-                and output.spec_decode_metrics is not None
+                and getattr(output, "spec_decode_metrics", None) is not None
             ):
                 metrics = output.spec_decode_metrics.to_dict()
                 self.draft_tokens += metrics["num_draft_tokens"]
@@ -202,9 +212,9 @@ class Resident:
             picture = None
             await self.engine.abort(request_id)
             raise
-        except VLLMClientError as exc:
+        except client_errors as exc:
             raise HTTPException(422, "Request exceeds the model input limits") from exc
-        except GracefulHTTPError as exc:
+        except graceful_errors as exc:
             raise HTTPException(
                 int(exc.http_status), "Engine rejected the request"
             ) from exc
@@ -310,6 +320,12 @@ def build_engine_config(args):
             "bf16": "hps_decode_graph_eagle_worker.DecodeGraphEagleWorker",
             "int8": "hps_decode_graph_int8_worker.DecodeGraphInt8Worker",
         }[decode_graphs]
+        if is_vllm019():
+            worker_extension = (
+                "hps_vllm019_int8_worker.Vllm019Int8Worker"
+                if decode_graphs == "int8"
+                else "hps_vllm019_worker.Vllm019EagleWorker"
+            )
         engine_args = argparse.Namespace(
             **(
                 vars(args)
@@ -334,7 +350,10 @@ def build_engine_config(args):
         )
         if decode_graphs:
             config["compilation_config"].update(
-                cudagraph_mode="FULL_DECODE_ONLY", cudagraph_capture_sizes=[args.k + 1]
+                cudagraph_mode=(
+                    "FULL_AND_PIECEWISE" if is_vllm019() else "FULL_DECODE_ONLY"
+                ),
+                cudagraph_capture_sizes=[args.k + 1],
             )
             config["speculative_config"]["use_local_argmax_reduction"] = (
                 decode_graphs == "int8"
@@ -382,6 +401,11 @@ def create_app(args) -> FastAPI:
         from vllm.sampling_params import RequestOutputKind
         from vllm.usage.usage_lib import UsageContext
         from vllm.v1.engine.async_llm import AsyncLLM
+
+        if is_vllm019() and recovery:
+            from vllm019_model import install
+
+            install()
 
         engine = AsyncLLM.from_engine_args(
             AsyncEngineArgs(**config), usage_context=UsageContext.LLM_CLASS
@@ -432,6 +456,7 @@ def create_app(args) -> FastAPI:
                 recovery_worker=recovery_worker,
                 max_completion_tokens=max_output,
                 max_model_len=config["max_model_len"],
+                request_metrics_available=not is_vllm019(),
             )
             yield
         finally:
@@ -455,9 +480,16 @@ def create_app(args) -> FastAPI:
         if ocr.recovery_worker is not None:
             evidence["speculative_decoding"] = dict(
                 worker=ocr.recovery_worker,
-                verification_steps=ocr.verification_steps,
-                draft_tokens=ocr.draft_tokens,
-                accepted_draft_tokens=ocr.accepted_draft_tokens,
+                request_metrics_available=ocr.request_metrics_available,
+                verification_steps=(
+                    ocr.verification_steps if ocr.request_metrics_available else None
+                ),
+                draft_tokens=(
+                    ocr.draft_tokens if ocr.request_metrics_available else None
+                ),
+                accepted_draft_tokens=(
+                    ocr.accepted_draft_tokens if ocr.request_metrics_available else None
+                ),
             )
         return dict(
             status="ready",

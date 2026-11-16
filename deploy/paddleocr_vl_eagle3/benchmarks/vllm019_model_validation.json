@@ -1,0 +1,24 @@
+{
+  "scope": "CPU-only target-model/configuration adapter validation",
+  "vllm_version": "0.19.0",
+  "upstream_source_commit": "2a69949bdadf0e8942b7a1619b229cb475beef20",
+  "checks": {
+    "contract_unit_tests": {
+      "run": 6,
+      "passed": 6
+    },
+    "real_engine_args_to_vllm_config": "passed",
+    "target_model_type_unchanged": "paddleocr_vl",
+    "target_max_model_len": 12288,
+    "draft_runtime_max_model_len": 12288,
+    "draft_runtime_max_position_embeddings": 12288,
+    "vllm_config_pickle_roundtrip": "passed",
+    "black_and_selected_flake8_rules": "passed"
+  },
+  "installation_order": [
+    "Main process: install after device/environment configuration and before EngineArgs.create_engine_config.",
+    "Worker: install before target/draft model construction."
+  ],
+  "checkpoint_files_modified": false,
+  "gpu_inference_covered_by_this_report": false
+}

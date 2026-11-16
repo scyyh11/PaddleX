@@ -1,0 +1,141 @@
+{
+  "date": "2026-11-16",
+  "scope": "vLLM 0.19.0 inference compatibility; finite numerical/performance regression, not a universal accuracy guarantee",
+  "environment": {
+    "gpu": "NVIDIA A100 80GB PCIe",
+    "vllm": "0.19.0",
+    "torch": "2.10.0",
+    "transformers": "4.57.6",
+    "triton": "3.6.0",
+    "pydantic": "2.14.3",
+    "nvidia-cublas-cu12": "12.8.4.1"
+  },
+  "profile": {
+    "target": "PaddleOCR-VL-1.6 BF16",
+    "draft": "VL-1.6 EAGLE3 K4 dense, private INT8 top-1",
+    "target_attention": "native FA2 AR1 row batch, matching AR1 split heuristic",
+    "cudagraph_mode": "FULL_AND_PIECEWISE",
+    "draft_cudagraph_mode": "PIECEWISE",
+    "async_scheduling": false,
+    "max_model_len": 12288,
+    "max_completion_tokens": 8192,
+    "kv_cache_mib": 512,
+    "gpu_memory_utilization": 0.06
+  },
+  "cpu_tests": {
+    "tests": 43,
+    "passed_in_vllm019_environment": 43,
+    "passed_in_vllm032_environment": 43,
+    "layout_recovery_tests_in_layout_environment": 9
+  },
+  "gpu_attention": {
+    "cases": 12,
+    "exact_cases": 12,
+    "max_absolute_difference": 0.0,
+    "kv_bounds": [
+      4096,
+      12288
+    ],
+    "query_counts": [
+      2,
+      5
+    ]
+  },
+  "crop_benchmark": {
+    "unique_crops": 32,
+    "repeats": 3,
+    "warmup_requests": 1,
+    "max_completion_tokens_per_request": 1024,
+    "output_tokens": 18363,
+    "length_limited_requests": 3,
+    "comparison": {
+      "status": "complete",
+      "all_exact": true,
+      "total": 96,
+      "exact_tokens": 96,
+      "exact_finish": 96,
+      "exact_prompt_tokens": 96,
+      "exact_tokens_and_finish": 96,
+      "baseline_latency_ms": 38980.69777409546,
+      "eagle_latency_ms": 28927.397669525817,
+      "latency_speedup": 1.3475355861395202,
+      "baseline_wall_ms": 38991.284884978086,
+      "eagle_wall_ms": 28937.321273144335,
+      "wall_speedup": 1.347439333341627,
+      "per_task": {
+        "ocr": {
+          "total": 36,
+          "exact_tokens": 36,
+          "exact_finish": 36,
+          "exact_prompt_tokens": 36,
+          "exact_tokens_and_finish": 36,
+          "baseline_latency_ms": 9235.746514052153,
+          "eagle_latency_ms": 7120.668730000034,
+          "latency_speedup": 1.2970335883118815
+        },
+        "formula": {
+          "total": 30,
+          "exact_tokens": 30,
+          "exact_finish": 30,
+          "exact_prompt_tokens": 30,
+          "exact_tokens_and_finish": 30,
+          "baseline_latency_ms": 3970.622829394415,
+          "eagle_latency_ms": 3039.391373982653,
+          "latency_speedup": 1.3063874772374335
+        },
+        "table": {
+          "total": 30,
+          "exact_tokens": 30,
+          "exact_finish": 30,
+          "exact_prompt_tokens": 30,
+          "exact_tokens_and_finish": 30,
+          "baseline_latency_ms": 25774.328430648893,
+          "eagle_latency_ms": 18767.33756554313,
+          "latency_speedup": 1.3733609437478556
+        }
+      }
+    }
+  },
+  "long_context": {
+    "min_pixels": 2822400,
+    "max_pixels": 2822400,
+    "prompt_tokens": 3698,
+    "output_tokens": 1089,
+    "finish_reason": "stop",
+    "exact_tokens": true,
+    "exact_finish": true,
+    "total_tokens": 4787
+  },
+  "whole_page_smoke": {
+    "pages": 1,
+    "layout": "PP-DocLayoutV3",
+    "postprocessing": "PaddleX VL-1.6 Markdown/JSON",
+    "same_physical_gpu_as_vlm": true,
+    "blocks": 18,
+    "markdown_characters": 1796,
+    "completed": true,
+    "baseline_accuracy_or_speed_comparison": false
+  },
+  "regression_fixed": "Native multi-query FA2 verification differed from autoregressive attention on the high-resolution table; matching per-query causal endpoints and AR1 split count restored exact output in this case.",
+  "checks": [
+    "Black 24.4.2",
+    "selected Flake8 7.0.0 rules",
+    "license headers",
+    "compileall",
+    "pip check"
+  ],
+  "limitations": [
+    "Other workloads retained GPU memory; GPU was not exclusively reserved.",
+    "Only the first crop was explicitly warmed before each three-repeat recording.",
+    "These are VLM crop timings, not whole-page throughput.",
+    "Full dataset accuracy and other hardware remain unvalidated.",
+    "Teacher feature capture still uses the 0.32 environment.",
+    "Twofold acceleration has not been demonstrated for this port."
+  ],
+  "artifacts_excluded": [
+    "document content",
+    "model weights",
+    "credentials",
+    "private platform records"
+  ]
+}

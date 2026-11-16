@@ -271,6 +271,8 @@ def parse_args(argv=None):
     parser.add_argument("--model", type=Path, default=DEFAULT_MODEL)
     parser.add_argument("--draft-model", type=Path, default=DEFAULT_DRAFT)
     parser.add_argument("--cache-root", type=Path)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.45)
+    parser.add_argument("--kv-cache-memory-mib", type=int, default=4096)
     args = parser.parse_args(argv)
     if (
         not args.gpu
@@ -280,6 +282,10 @@ def parse_args(argv=None):
     ):
         parser.error("Choose one GPU, a valid port, and 0–32 waiting clients")
     args.worker_extension = DEFAULT_EXTENSION
+    if not 0 < args.gpu_memory_utilization <= 1 or args.kv_cache_memory_mib <= 0:
+        parser.error(
+            "Choose a GPU memory fraction in (0, 1] and a positive KV cache size"
+        )
     if args.hps_max_completion_tokens is None:
         args.hps_max_completion_tokens = (
             HPS_TOKEN_LIMIT if args.mode == RECOVERY_MODE else 1024

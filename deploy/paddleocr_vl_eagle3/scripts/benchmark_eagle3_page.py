@@ -391,9 +391,12 @@ class PageRecognizer:
                         "eager",
                         "async_scheduling",
                         "cudagraph_mode",
+                        "draft_cudagraph_mode",
                         "capture_sizes",
                         "draft_head_execution",
                         "target_attention",
+                        "runtime_profile",
+                        "target_projection",
                         "max_model_len",
                     )
                 }

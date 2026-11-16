@@ -44,7 +44,13 @@ def install():
         result = original_forward(self, *args, **kwargs)
         if not getattr(self, "_ocr_native_return_aux", False):
             return result
-        return result if isinstance(result, tuple) else (result, [])
+        if (
+            not isinstance(result, tuple)
+            or len(result) != 2
+            or len(result[1]) != len(self._ocr_native_aux_layers)
+        ):
+            raise RuntimeError("PaddleOCR-VL did not return all three EAGLE3 states")
+        return result
 
     Target.supports_eagle3 = True
     Target.has_own_lm_head = False
