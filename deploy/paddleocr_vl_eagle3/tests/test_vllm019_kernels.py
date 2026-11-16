@@ -14,6 +14,7 @@
 
 """CPU contract checks for the old proposer's distinct initialization lifecycle."""
 import importlib.util
+import os
 from pathlib import Path
 import sys
 from types import SimpleNamespace
@@ -21,6 +22,8 @@ import unittest
 from unittest.mock import patch
 
 SCRIPTS = Path(__file__).resolve().parents[1] / "scripts"
+sys.path.insert(0, str(SCRIPTS))
+from runtime_config import VISION_GRAPHS_ENV, VISION_GRAPHS_POLICY
 
 
 class GraphWrapper:
@@ -43,6 +46,7 @@ class Vllm019WorkerTests(unittest.TestCase):
         self.plans = {42: {"private_vocab_size": 40000, "target_vocab_size": 103424}}
         self.ar1_installs = []
         self.linear_installs = []
+        self.vision_installs = []
         self.linear_metadata = {
             "installed": True,
             "persistent_plans": 73,
@@ -79,10 +83,20 @@ class Vllm019WorkerTests(unittest.TestCase):
                 install=lambda: None, metadata=lambda: {}
             ),
             "vllm019_vision_scalar": SimpleNamespace(
-                install=lambda: None, metadata=lambda: {}
+                install=lambda: self.vision_installs.append(("scalar", {})),
+                metadata=lambda: {},
+            ),
+            "vllm019_vision_graph": SimpleNamespace(
+                install=lambda **kwargs: self.vision_installs.append(("graph", kwargs)),
+                metadata=lambda: dict(
+                    installed=True, enabled=True, **VISION_GRAPHS_POLICY
+                ),
             ),
         }
-        with patch.dict(sys.modules, modules):
+        self.modules = modules
+        with patch.dict(sys.modules, modules), patch.dict(
+            os.environ, {VISION_GRAPHS_ENV: "0"}
+        ):
             self.base = load("hps_vllm019_worker")
             with patch.dict(sys.modules, {"hps_vllm019_worker": self.base}):
                 self.int8 = load("hps_vllm019_int8_worker")
@@ -128,6 +142,47 @@ class Vllm019WorkerTests(unittest.TestCase):
         self.assertFalse(result["draft_top1_in_forward_graph"])
         self.assertEqual(result["draft_head_startup"]["top1_dispatches"], {})
         self.assertFalse(result["cuda13_locked_kernels"])
+
+    def test_vision_graph_default_keeps_scalar_without_importing_graph(self):
+        modules = dict(self.modules, hps_vllm019_worker=self.base)
+        modules["vllm019_vision_graph"] = None
+        self.vision_installs.clear()
+        with patch.dict(sys.modules, modules), patch.dict(os.environ, {}, clear=True):
+            worker_module = load("hps_vllm019_int8_worker")
+        self.assertEqual(self.vision_installs, [("scalar", {})])
+        metadata = self.worker(worker_module.Vllm019Int8Worker).hps_eagle_metadata()[
+            "vision_graphs"
+        ]
+        self.assertEqual(
+            metadata,
+            dict(
+                requested=False,
+                installed=False,
+                enabled=False,
+                configuration=VISION_GRAPHS_POLICY,
+            ),
+        )
+
+    def test_explicit_vision_graph_installs_after_scalar_and_reports_policy(self):
+        self.vision_installs.clear()
+        modules = dict(self.modules, hps_vllm019_worker=self.base)
+        with patch.dict(sys.modules, modules), patch.dict(
+            os.environ, {VISION_GRAPHS_ENV: "1"}
+        ):
+            worker_module = load("hps_vllm019_int8_worker")
+        self.assertEqual(
+            self.vision_installs,
+            [("scalar", {}), ("graph", {"audit_changed_inputs": 0})],
+        )
+        metadata = self.worker(worker_module.Vllm019Int8Worker).hps_eagle_metadata()[
+            "vision_graphs"
+        ]
+        self.assertTrue(metadata["requested"])
+        self.assertTrue(metadata["enabled"])
+        self.assertTrue(metadata["installed"])
+        self.assertEqual(metadata["configuration"], VISION_GRAPHS_POLICY)
+        for key, value in VISION_GRAPHS_POLICY.items():
+            self.assertEqual(metadata[key], value)
 
     def test_bf16_and_int8_share_the_target_attention_compatibility_path(self):
         self.assertEqual(self.ar1_installs, [True])

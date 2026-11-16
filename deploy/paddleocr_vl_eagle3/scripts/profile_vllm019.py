@@ -23,13 +23,14 @@ from pathlib import Path
 import time
 
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--gpu", default="1")
     parser.add_argument("--model", type=Path)
     parser.add_argument("--draft-model", type=Path)
     parser.add_argument("--cache-root", type=Path)
     parser.add_argument("--vllm019-packed-attention-library", type=Path)
+    parser.add_argument("--vllm019-vision-graphs", action="store_true")
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--tasks", nargs="+", default=["ocr", "table"])
     parser.add_argument("--per-task", type=int, default=2)
@@ -44,7 +45,7 @@ def parse_args():
     parser.add_argument("--trace-max-iterations", type=int, default=64)
     parser.add_argument("--trace-delay-iterations", type=int, default=0)
     parser.add_argument("--output", type=Path, required=True)
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
     if min(args.per_task, args.max_tokens, args.repeats, args.trace_limit) < 1:
         parser.error(
             "Sample counts, token limit, repeats and trace limit must be positive"
@@ -52,12 +53,8 @@ def parse_args():
     return args
 
 
-def main():
-    args = parse_args()
-    from runtime_config import configure_environment, request_for
-    from serve_hps_vlm import parse_args as service_args
-    from serve_ocr import build_engine_config
-
+def service_argv(args):
+    """Use the same explicit opt-ins and profile validation as the HTTP entry."""
     argv = [
         "--gpu",
         args.gpu,
@@ -80,6 +77,18 @@ def main():
     ):
         if getattr(args, key) is not None:
             argv += ["--" + key.replace("_", "-"), str(getattr(args, key))]
+    if args.vllm019_vision_graphs:
+        argv.append("--vllm019-vision-graphs")
+    return argv
+
+
+def main():
+    args = parse_args()
+    from runtime_config import configure_environment, request_for
+    from serve_hps_vlm import parse_args as service_args
+    from serve_ocr import build_engine_config
+
+    argv = service_argv(args)
     config, engine_args, identity_config = build_engine_config(service_args(argv))
     environment = configure_environment(engine_args, identity_config)
     trace_dir = (

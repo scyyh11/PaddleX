@@ -13,6 +13,9 @@
 # limitations under the License.
 
 """Private INT8 draft top-1 on vLLM 0.19.0's native greedy proposer."""
+import os
+
+from runtime_config import VISION_GRAPHS_ENV, VISION_GRAPHS_POLICY
 from hps_vllm019_worker import Vllm019EagleWorker
 from round3_eagle_fused_int8_top1 import install, metadata
 from round3_eagle_fused_int8_head import PLANS
@@ -49,6 +52,27 @@ install_draft_staging()
 install_sampler_graph()
 install_vision_scalar()
 
+_VISION_GRAPHS_REQUESTED = os.environ.get(VISION_GRAPHS_ENV, "0") == "1"
+_vision_graph = None
+if _VISION_GRAPHS_REQUESTED:
+    import vllm019_vision_graph as _vision_graph
+
+    _vision_graph.install(
+        audit_changed_inputs=VISION_GRAPHS_POLICY["audit_changed_inputs"]
+    )
+
+
+def vision_graph_metadata():
+    return {
+        "requested": _VISION_GRAPHS_REQUESTED,
+        "configuration": dict(VISION_GRAPHS_POLICY),
+        **(
+            _vision_graph.metadata()
+            if _vision_graph is not None
+            else {"installed": False, "enabled": False}
+        ),
+    }
+
 
 class Vllm019Int8Worker(Vllm019EagleWorker):
     def hps_eagle_metadata(self):
@@ -83,5 +107,6 @@ class Vllm019Int8Worker(Vllm019EagleWorker):
             draft_staging=staging_metadata(),
             target_argmax=sampler_graph_metadata(),
             vision_scalar=vision_scalar_metadata(),
+            vision_graphs=vision_graph_metadata(),
         )
         return data

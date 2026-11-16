@@ -321,6 +321,7 @@ def main():
     parser.add_argument("--model-version", choices=("1.6",), default="1.6")
     parser.add_argument("--recovery-decode-graphs", choices=("bf16", "int8"))
     parser.add_argument("--vllm019-packed-attention-library", type=Path)
+    parser.add_argument("--vllm019-vision-graphs", action="store_true")
     parser.add_argument(
         "--hps-max-completion-tokens", type=int, choices=(1024, 4096, 8192)
     )
@@ -343,6 +344,14 @@ def main():
     ):
         parser.error(
             "--vllm019-packed-attention-library requires recovery/int8 and context 4096 or 12288"
+        )
+    if args.vllm019_vision_graphs and (
+        args.mode != "eagle3-recovery"
+        or args.recovery_decode_graphs not in (None, "int8")
+        or args.hps_max_completion_tokens not in (None, 1024, 8192)
+    ):
+        parser.error(
+            "--vllm019-vision-graphs requires recovery/int8 and context 4096 or 12288"
         )
     cmd = [
         sys.executable,
@@ -370,6 +379,8 @@ def main():
             "--vllm019-packed-attention-library",
             str(args.vllm019_packed_attention_library.expanduser().resolve()),
         ]
+    if args.vllm019_vision_graphs:
+        cmd.append("--vllm019-vision-graphs")
     if args.hps_max_completion_tokens is not None:
         cmd += ["--hps-max-completion-tokens", str(args.hps_max_completion_tokens)]
     stop = threading.Event()

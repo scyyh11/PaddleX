@@ -37,6 +37,19 @@ DEFAULT_DRAFT = Path(
     )
 ).expanduser()
 DEFAULT_EXTENSION = "hps_decode_graph_int8_worker.DecodeGraphInt8Worker"
+VISION_GRAPHS_ENV = "PADDLEOCR_VLLM019_VISION_GRAPHS"
+# This fixed policy is also reported by the worker. The implementation source is
+# hashed below, so changing its admission or cache policy invalidates old keys.
+VISION_GRAPHS_POLICY = {
+    "max_graphs": 32,
+    "max_cached_bytes": 1024 * 1024**2,
+    "max_sequence_length": 2048,
+    "minimum_reuse": 2,
+    "minimum_free_bytes": 1536 * 1024**2,
+    "actual_raw_bit_admission": True,
+    "clone_output": True,
+    "audit_changed_inputs": 0,
+}
 PROMPTS = {
     "ocr": "OCR:",
     "table": "Table Recognition:",
@@ -83,6 +96,38 @@ def runtime_version():
 
 def is_vllm019():
     return runtime_version() == "0.19.0"
+
+
+def validate_vision_graph_configuration(args, config, *, version):
+    """Validate the opt-in after resolving the service's native engine config."""
+    if not getattr(args, "vllm019_vision_graphs", False):
+        return
+    spec = config.get("speculative_config", {})
+    compilation = config.get("compilation_config", {})
+    if (
+        version != "0.19.0"
+        or getattr(args, "model_version", "1.6") != "1.6"
+        or getattr(args, "mode", None) not in ("eagle3-recovery", "accelerated")
+        or getattr(args, "recovery_decode_graphs", None) != "int8"
+        or config.get("worker_extension_cls")
+        != "hps_vllm019_int8_worker.Vllm019Int8Worker"
+        or config.get("max_num_seqs") != 1
+        or config.get("tensor_parallel_size") != 1
+        or config.get("max_model_len") not in (4096, 12288)
+        or config.get("dtype") != "bfloat16"
+        or config.get("async_scheduling") is not True
+        or config.get("enforce_eager") is not False
+        or spec.get("method") != "eagle3"
+        or spec.get("num_speculative_tokens") != 4
+        or spec.get("use_local_argmax_reduction") is not True
+        or compilation.get("mode") != 3
+        or compilation.get("cudagraph_mode") != "FULL_AND_PIECEWISE"
+        or compilation.get("cudagraph_capture_sizes") != [5]
+    ):
+        raise ValueError(
+            "--vllm019-vision-graphs requires VL-1.6 on vLLM 0.19 recovery/int8, "
+            "B1/K4/TP1 BF16 with async Q5 decode graphs and context 4096 or 12288"
+        )
 
 
 def engine_config(args):
@@ -153,6 +198,8 @@ def configure_environment(args, config):
     )
 
     validate_configuration(args, config, version=versions["vllm"])
+    validate_vision_graph_configuration(args, config, version=versions["vllm"])
+    vision_graphs = bool(getattr(args, "vllm019_vision_graphs", False))
     packed_path = getattr(args, "vllm019_packed_attention_library", None)
     packed_artifact = (
         verify_artifact(packed_path, bundle_root=ROOT / "kernels/fa2_sm80")
@@ -179,6 +226,7 @@ def configure_environment(args, config):
             "vllm019_graph_argmax.py",
             "vllm019_sampler_graph.py",
             "vllm019_vision_scalar.py",
+            "vllm019_vision_graph.py",
         )
         + PACKED_SOURCES
         if legacy
@@ -195,6 +243,8 @@ def configure_environment(args, config):
     )
     if packed_artifact is not None:
         basis["packed_attention"] = packed_artifact
+    if legacy:
+        basis["vision_graphs"] = dict(enabled=vision_graphs, **VISION_GRAPHS_POLICY)
     fingerprint = hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
     cache = (
         getattr(args, "cache_root", None) or ROOT / "runtime_cache" / fingerprint[:20]
@@ -214,6 +264,8 @@ def configure_environment(args, config):
         os.environ.pop(LIBRARY_ENV, None)
     else:
         os.environ[LIBRARY_ENV] = packed_artifact["library"]
+    # Explicit zero overrides any inherited opt-in, including in non-0.19 runs.
+    os.environ[VISION_GRAPHS_ENV] = "1" if vision_graphs else "0"
     scripts = str(ROOT / "scripts")
     search_paths = [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
     os.environ["PYTHONPATH"] = os.pathsep.join(

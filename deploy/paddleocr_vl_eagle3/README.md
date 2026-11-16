@@ -10,7 +10,7 @@
 - 0.32 服务：原生视觉预处理与编码，EAGLE3 草稿 INT8 top-1，目标 BF16 验证，同步 `FULL_DECODE_ONLY` CUDA Graph。0.19 使用适合旧版草稿执行器的图配置，见下方兼容说明。
 - 整页：官方 PaddleX 1.6 产线，`PP-DocLayoutV3` 检测、裁块，VLM 逐块识别，官方 Markdown/JSON 后处理。
 - 已验证的历史环境：Linux x86-64、Python 3.12、单张 NVIDIA A100 80GB PCIe、vLLM **0.32.0**、PyTorch **2.13.0+cu130**、Transformers **5.19.0**。cuBLASLt 算法也按已验证版本固定，不能仅升级 vLLM 后沿用准确性结论。
-- **0.19.0 使用独立兼容路径**：补齐模型校验、多模态映射与草稿上下文，使用 EAGLE3 K4、完整私有词表 INT8 草稿头和完整 proposal CUDA Graph。目标保留 BF16 权重，验证投影锁定当前 CUDA12 的原生单 token 算法，attention 保留 AR1 终点与 split 规则；另提供需显式启用的 packed FA2 构建。安装、性能对照及数值边界见 [docs/VLLM019.md](docs/VLLM019.md)。未声明 0.19.1 或其它版本受支持。
+- **0.19.0 使用独立兼容路径**：补齐模型校验、多模态映射与草稿上下文，使用 EAGLE3 K4、完整私有词表 INT8 草稿头和完整 proposal CUDA Graph。目标保留 BF16 权重，验证投影锁定当前 CUDA12 的原生单 token 算法，attention 保留 AR1 终点与 split 规则；另提供需显式启用的 packed FA2 构建和短视觉序列 CUDA Graph。视觉图需要额外显存与首次捕获，默认关闭。安装、性能对照及数值边界见 [docs/VLLM019.md](docs/VLLM019.md)。未声明 0.19.1 或其它版本受支持。
 
 权重、数据集、教师特征、缓存和平台凭据不在 Git 中。已训练的草稿目前需要从原部署的 checkpoint 单独取得；本目录没有提供它的公开下载地址。
 

@@ -40,6 +40,7 @@ from runtime_config import (
     engine_config,
     is_vllm019,
     request_for,
+    validate_vision_graph_configuration,
 )
 
 BODY_LIMIT = 8 * 1024 * 1024
@@ -364,6 +365,9 @@ def build_engine_config(args):
     from vllm019_packed_attention import validate_configuration
 
     validate_configuration(args, config, version="0.19.0" if is_vllm019() else "0.32.0")
+    validate_vision_graph_configuration(
+        args, config, version="0.19.0" if is_vllm019() else "0.32.0"
+    )
     identity_config = config
     if decode_graphs:
         # The optional INT8 worker imports the same graph attention implementation

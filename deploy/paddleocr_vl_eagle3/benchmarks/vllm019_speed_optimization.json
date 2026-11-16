@@ -207,8 +207,8 @@
     "protocol": "Both modes fully warmed on the same 32 crops before three serial 96-request trials; ratio of median wall times; no simultaneous timed GPU jobs."
   },
   "cpu_checks": {
-    "unit_tests_019": 169,
-    "unit_tests_032": 169,
+    "unit_tests_019": 238,
+    "unit_tests_032": 238,
     "native_build_contracts": 12,
     "layout_environment_recovery_contracts": 9,
     "all_passed": true,
@@ -757,5 +757,227 @@
     }
   },
   "crop_steady_twofold_demonstrated": false,
-  "overall_stable_twofold_demonstrated": false
+  "overall_stable_twofold_demonstrated": false,
+  "vision_encoder_graph_experiments": {
+    "scope": "Isolated prototypes; same 32-crop benchmark. Cold timing includes new graph capture and additional changed-input audits.",
+    "variants": [
+      {
+        "configuration": "All eligible visual lengths with recursive model checks",
+        "prototype": true,
+        "cold_wall_ms": 24419.85662188381,
+        "steady_wall_ms": [
+          20328.790053958073,
+          20988.071558065712,
+          20563.53811896406
+        ],
+        "median_steady_wall_ms": 20563.53811896406,
+        "steady_speedup": 1.9067728658442973,
+        "exact_steady_requests": 288,
+        "decision": "Not adopted; no service improvement over scalar-only"
+      },
+      {
+        "configuration": "All eligible visual lengths with flattened model checks",
+        "prototype": true,
+        "cold_wall_ms": 23676.768593955785,
+        "steady_wall_ms": [
+          19844.170606927946,
+          19947.53400492482,
+          19832.494637928903
+        ],
+        "median_steady_wall_ms": 19844.170606927946,
+        "steady_speedup": 1.97589495109998,
+        "exact_steady_requests": 288,
+        "decision": "Not adopted; no service improvement over scalar-only"
+      },
+      {
+        "configuration": "Visual lengths at most 2048 with flattened model checks",
+        "prototype": true,
+        "cold_wall_ms": 22210.045042913407,
+        "steady_wall_ms": [
+          19461.243745172396,
+          19490.948270075023,
+          19461.853974033147
+        ],
+        "median_steady_wall_ms": 19461.853974033147,
+        "steady_speedup": 2.0147102410341398,
+        "exact_steady_requests": 288,
+        "decision": "Short-sequence approach selected; public memory policy restricted further after a colocated layout OOM"
+      }
+    ],
+    "guard_cpu_us": {
+      "repeats": 100,
+      "module_count": 301,
+      "tensor_count": 325,
+      "gpu_work": false,
+      "guard_speedup": 3.166507148466622,
+      "stronger_checks": "dict keysets, opaque public attribute identity and registration-map identity are additionally frozen",
+      "old_signature": {
+        "mean_us": 6062.15168,
+        "median_us": 6046.1145,
+        "min_us": 5963.066,
+        "max_us": 6509.877
+      },
+      "fast_matches": {
+        "mean_us": 1913.09725,
+        "median_us": 1909.3955,
+        "min_us": 1888.494,
+        "max_us": 2096.256
+      }
+    },
+    "component_benchmark": {
+      "records": [
+        {
+          "hidden": [
+            1,
+            600,
+            1152
+          ],
+          "raw_bits_exact": true,
+          "repeats": 20,
+          "native_stack": {
+            "wall_us": 14983.94295340404,
+            "cpu_submit_us": 14981.12465487793,
+            "gpu_stream_span_us": 14982.3486328125
+          },
+          "graph_copy_replay_clone": {
+            "wall_us": 6055.137352086604,
+            "cpu_submit_us": 973.7743996083736,
+            "gpu_stream_span_us": 6053.478240966797
+          }
+        },
+        {
+          "hidden": [
+            1,
+            5040,
+            1152
+          ],
+          "raw_bits_exact": true,
+          "repeats": 20,
+          "native_stack": {
+            "wall_us": 57030.0062536262,
+            "cpu_submit_us": 50323.53369751945,
+            "gpu_stream_span_us": 57027.227783203125
+          },
+          "graph_copy_replay_clone": {
+            "wall_us": 56664.84170360491,
+            "cpu_submit_us": 32.862648367881775,
+            "gpu_stream_span_us": 56662.68310546875
+          }
+        }
+      ],
+      "includes_input_copies_and_output_clone": true,
+      "includes_immutable_guard": false
+    },
+    "interpretation": "Small visual sequences benefited from reduced CPU submission overhead; long visual sequences did not. Shape-limited capture avoids paying model checks on long inputs.",
+    "rejected_memory_policy": {
+      "max_cached_bytes": 1610612736,
+      "minimum_free_bytes": 536870912,
+      "finding": "After main and independent crop warmup, the VLM left about 939 MiB free; DocLayoutV3 ran out of memory during its first warmup before sending VLM requests.",
+      "completed_whole_page_measurements": 0,
+      "decision": "Not retained. Final public policy limits graph cache to 1 GiB and requires 1.5 GiB free before capture; the same crop-then-layout order is retested.",
+      "public_crop_steady_wall_ms": [
+        19561.255756998435,
+        19471.945773111656,
+        19394.162110053003
+      ],
+      "public_crop_steady_speedup": 2.003864992572745,
+      "decision_includes_layout_memory_requirement": true
+    }
+  },
+  "optional_vision_graph_configuration": {
+    "enabled_by_default": false,
+    "cli": "--vllm019-vision-graphs",
+    "policy": {
+      "max_graphs": 32,
+      "max_cached_bytes": 1073741824,
+      "max_sequence_length": 2048,
+      "minimum_reuse": 2,
+      "minimum_free_bytes": 1610612736,
+      "actual_raw_bit_admission": true,
+      "clone_output": true,
+      "audit_changed_inputs": 0
+    },
+    "public_entrypoint": true,
+    "packed_attention_enabled": true,
+    "scope": "Additional opt-in on top of the scalar-only final configuration above; identical checkpoint weights, resolution and native vision operators.",
+    "steady_state": {
+      "unique_crops": 32,
+      "requests_per_trial": 96,
+      "trials_per_mode": 3,
+      "baseline_wall_ms": [
+        39158.68028695695,
+        38997.37573298626,
+        39019.15047201328
+      ],
+      "optimized_wall_ms": [
+        19943.496631924063,
+        19657.00117405504,
+        19545.686300145462
+      ],
+      "baseline_median_ms": 39019.15047201328,
+      "optimized_median_ms": 19657.00117405504,
+      "median_speedup": 1.9850001598165457,
+      "baseline_exact_requests": 288,
+      "optimized_exact_requests": 288,
+      "protocol": "Fresh baseline confirmation followed by final public opt-in service; both fully warmed before three serial trials; no concurrent timed GPU jobs or CPU test suites."
+    },
+    "first_use": {
+      "wall_ms": 21569.452442927286,
+      "requests": 96,
+      "exact_requests": 96,
+      "mandatory_actual_input_audit": true,
+      "additional_changed_input_audits": 0,
+      "first_use_capture_included": true,
+      "warmup_requests": 1
+    },
+    "independent_crops": {
+      "unique_crops": 32,
+      "baseline_wall_ms": 9122.161449864507,
+      "runs": [
+        {
+          "phase": "First pass on the independent set",
+          "wall_ms": 4900.781593983993,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.861368696997743
+        },
+        {
+          "phase": "Second pass; additional shapes may capture",
+          "wall_ms": 5111.96769005619,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.7844716561117853
+        },
+        {
+          "phase": "Third pass after both earlier passes",
+          "wall_ms": 4780.628588981926,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.9081510475188672
+        }
+      ],
+      "note": "These use the same previously recorded independent baseline; second-pass capture cost is retained and not presented as fully warmed performance."
+    },
+    "whole_page": {
+      "unique_pages": 4,
+      "repeats": 2,
+      "exact_requests": 8,
+      "baseline_ms": 35005.036293528974,
+      "optimized_ms": 24119.63316379115,
+      "speedup": 1.4513088178338962,
+      "warmup_pages": 1,
+      "layout": "PP-DocLayoutV3",
+      "postprocessing": "Official PaddleX Markdown and JSON",
+      "baseline": "Same previously recorded whole-page baseline"
+    },
+    "long_context": {
+      "prompt_tokens": 3698,
+      "output_tokens": 1089,
+      "finish_reason": "stop",
+      "exact_tokens": true,
+      "timing_used_for_speed_claim": false
+    },
+    "limitations": [
+      "The main crop steady median is close to the twofold boundary and can vary with load and input distribution.",
+      "First-use capture and audits can make new-shape workloads slower; extra graph memory is required.",
+      "No twofold claim for all inputs, the independent set, whole pages or the full platform benchmark."
+    ]
+  }
 }

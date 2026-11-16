@@ -276,6 +276,11 @@ def parse_args(argv=None):
         type=Path,
         help="Opt in to the built finite-QKV A100 FA2 library (vLLM 0.19 recovery/int8 only)",
     )
+    parser.add_argument(
+        "--vllm019-vision-graphs",
+        action="store_true",
+        help="Opt in to exact-shape short vision graphs (vLLM 0.19 recovery/int8 only)",
+    )
     parser.add_argument("--gpu-memory-utilization", type=float, default=0.45)
     parser.add_argument("--kv-cache-memory-mib", type=int, default=4096)
     args = parser.parse_args(argv)
@@ -306,6 +311,14 @@ def parse_args(argv=None):
     ):
         parser.error(
             "--vllm019-packed-attention-library requires recovery/int8 and context 4096 or 12288"
+        )
+    if args.vllm019_vision_graphs and (
+        args.mode != RECOVERY_MODE
+        or args.recovery_decode_graphs != "int8"
+        or args.hps_max_completion_tokens not in (1024, HPS_TOKEN_LIMIT)
+    ):
+        parser.error(
+            "--vllm019-vision-graphs requires recovery/int8 and context 4096 or 12288"
         )
     args.k, args.seed = 4, 0
     return args

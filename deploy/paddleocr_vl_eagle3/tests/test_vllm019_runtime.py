@@ -115,6 +115,7 @@ class Vllm019ConfigurationTests(unittest.TestCase):
                 "vllm019_graph_argmax.py",
                 "vllm019_sampler_graph.py",
                 "vllm019_vision_scalar.py",
+                "vllm019_vision_graph.py",
             )
             + PACKED_SOURCES
         ):
@@ -138,6 +139,7 @@ class Vllm019ConfigurationTests(unittest.TestCase):
                 "vllm019_model.py",
                 "vllm019_locked_lt.py",
                 "vllm019_target_linear.py",
+                "vllm019_vision_graph.py",
                 *PACKED_SOURCES,
             ):
                 with self.subTest(source=name):
