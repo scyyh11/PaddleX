@@ -1,0 +1,2 @@
+[vllm.general_plugins]
+paddlex_eagle3_hps = hps_batch.eagle3_adapter:register

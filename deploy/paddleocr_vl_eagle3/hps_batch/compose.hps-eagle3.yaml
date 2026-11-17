@@ -1,0 +1,21 @@
+# Overlay for scyyh11/PaddleOCR feat/paddleocr-vl-1.8 HPS compose,
+# inspected at commit 888b12d9a4ce3316b6714cdc0cbcc956e1604b5d.
+# Merge after the original compose.yaml; keep the original .env.
+services:
+  paddleocr-vlm-server:
+    # Inherit image, entrypoint, GPU reservation, healthcheck, and all old env.
+    # The original /entrypoint.sh and its exact console argv still execute.
+    command: ["python", "/opt/paddlex-eagle3/hps_batch/compose_bridge.py", "--", "/bin/sh", "/entrypoint.sh"]
+    environment:
+      EAGLE3_MODE: ${EAGLE3_MODE:-baseline}
+      EAGLE3_K: ${EAGLE3_K:-4}
+      PADDLEX_HPS_BATCH_VISION: ${PADDLEX_HPS_BATCH_VISION:-0}
+      PADDLEX_HPS_CPU_GRID: ${PADDLEX_HPS_CPU_GRID:-0}
+      PADDLEX_HPS_NATIVE_API_DISPATCH: ${PADDLEX_HPS_NATIVE_API_DISPATCH:-0}
+      EAGLE3_DRAFT_MODEL: /models/eagle3-draft
+      EAGLE3_AUDIT_OUTPUT: /eagle3-results/${EAGLE3_RUN_ID:?Set a unique EAGLE3_RUN_ID}-launch.json
+      PADDLEX_HPS_IMAGE_REFERENCE: ${HPS_VLM_IMAGE:-ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddleocr-genai-vllm-server:paddleocr3.8-nvidia-gpu-vllm0.19.0}
+    volumes:
+      - ${EAGLE3_ADAPTER_ROOT:?Set the absolute deploy/paddleocr_vl_eagle3 directory}:/opt/paddlex-eagle3:ro
+      - ${EAGLE3_RESULTS_DIR:?Set an absolute private results directory}:/eagle3-results
+      - ${EAGLE3_DRAFT_DIR:?Set the absolute existing draft directory}:/models/eagle3-draft:ro

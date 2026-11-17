@@ -1,0 +1,4 @@
+Metadata-Version: 2.1
+Name: paddlex-hps-eagle3
+Version: 0.1.0
+Summary: Dependency-free entry point for the mounted PaddleX HPS EAGLE3 adapter
