@@ -1,0 +1,997 @@
+{
+  "date": "2026-11-16",
+  "scope": "B1 request-latency experiment on a single A100 with vLLM 0.19.0 and PaddleOCR-VL-1.6; baseline and EAGLE3 services both serialize generation. Not a throughput comparison against an existing HPS continuous-batching deployment.",
+  "environment": {
+    "gpu": "NVIDIA A100 80GB PCIe",
+    "sm": 80,
+    "multiprocessors": 108,
+    "python": "3.12",
+    "vllm": "0.19.0",
+    "torch": "2.10.0+cu128",
+    "cuda": "12.8",
+    "cublas": "12.8.4.1",
+    "triton": "3.6.0",
+    "transformers": "4.57.6",
+    "exclusive_gpu": false
+  },
+  "models": {
+    "target": "PaddlePaddle/PaddleOCR-VL-1.6",
+    "target_weights_sha256": "85a479d506a11e724e7285d395c551be69f41dbc16b6342d3cacfb189aed71db",
+    "draft": "VL-1.6 EAGLE3 K4 dense",
+    "draft_weights_sha256": "b7f5dc74168e594eea4c7d961c4c95e7f9c730adbd058f76d20ea48275a4157d",
+    "checkpoint_weights_changed": false,
+    "checkpoint_private_vocab_size": 40000,
+    "effective_proposal_vocab_size": 40000,
+    "target_vocab_size": 103424
+  },
+  "final_configuration": {
+    "target_dtype": "BF16",
+    "target_verification": "CUDA12 native-Q1 projection recipes and optional finite-QKV packed FA2 with AR1 endpoints/splits",
+    "target_quantized": false,
+    "draft_head": "complete private INT8 top-1",
+    "k": 4,
+    "batch_size": 1,
+    "async_scheduling": true,
+    "full_draft_graph": true,
+    "draft_graph_bounds": [
+      128,
+      256,
+      512,
+      1024,
+      2048,
+      4096,
+      8192,
+      12288
+    ],
+    "max_model_len": 12288,
+    "engine_completion_cap": 8192,
+    "kv_cache_mib": 512,
+    "gpu_memory_utilization_argument": 0.06,
+    "prefix_cache": false,
+    "image_processor_cache": false,
+    "image_or_result_cache": false,
+    "packed_attention_enabled": true,
+    "packed_attention_default": false
+  },
+  "crop_benchmark": {
+    "unique_crops": 32,
+    "repeats": 3,
+    "warmup_requests": 1,
+    "completion_cap": 1024,
+    "output_tokens": 18363,
+    "length_limited_requests": 3,
+    "first_use_graph_capture_cost_included": true,
+    "comparison": {
+      "status": "complete",
+      "all_exact": true,
+      "total": 96,
+      "exact_tokens": 96,
+      "exact_finish": 96,
+      "exact_prompt_tokens": 96,
+      "exact_tokens_and_finish": 96,
+      "baseline_latency_ms": 39367.857944220304,
+      "eagle_latency_ms": 20015.069480985403,
+      "latency_speedup": 1.9669108809050262,
+      "baseline_wall_ms": 39380.89060015045,
+      "eagle_wall_ms": 20028.914753114805,
+      "wall_speedup": 1.9662019178560894,
+      "per_task": {
+        "ocr": {
+          "total": 36,
+          "exact_tokens": 36,
+          "exact_finish": 36,
+          "exact_prompt_tokens": 36,
+          "exact_tokens_and_finish": 36,
+          "baseline_latency_ms": 9309.699711855501,
+          "eagle_latency_ms": 5220.417925389484,
+          "latency_speedup": 1.78332460061824
+        },
+        "formula": {
+          "total": 30,
+          "exact_tokens": 30,
+          "exact_finish": 30,
+          "exact_prompt_tokens": 30,
+          "exact_tokens_and_finish": 30,
+          "baseline_latency_ms": 4074.4978201109916,
+          "eagle_latency_ms": 2468.6336785089225,
+          "latency_speedup": 1.6505072646388046
+        },
+        "table": {
+          "total": 30,
+          "exact_tokens": 30,
+          "exact_finish": 30,
+          "exact_prompt_tokens": 30,
+          "exact_tokens_and_finish": 30,
+          "baseline_latency_ms": 25983.660412253812,
+          "eagle_latency_ms": 12326.017877086997,
+          "latency_speedup": 2.1080336464995066
+        }
+      }
+    }
+  },
+  "independent_crops": {
+    "unique_crops": 32,
+    "repeats": 1,
+    "completion_cap": 1024,
+    "comparison": {
+      "status": "complete",
+      "all_exact": true,
+      "total": 32,
+      "exact_tokens": 32,
+      "exact_finish": 32,
+      "exact_prompt_tokens": 32,
+      "exact_tokens_and_finish": 32,
+      "baseline_latency_ms": 9118.177212309092,
+      "eagle_latency_ms": 4956.694324733689,
+      "latency_speedup": 1.8395681910037873,
+      "baseline_wall_ms": 9122.161449864507,
+      "eagle_wall_ms": 4959.994732867926,
+      "wall_speedup": 1.8391474066324194,
+      "per_task": {
+        "ocr": {
+          "total": 12,
+          "exact_tokens": 12,
+          "exact_finish": 12,
+          "exact_prompt_tokens": 12,
+          "exact_tokens_and_finish": 12,
+          "baseline_latency_ms": 2504.953315947205,
+          "eagle_latency_ms": 1810.2901030797511,
+          "latency_speedup": 1.383730326805444
+        },
+        "formula": {
+          "total": 10,
+          "exact_tokens": 10,
+          "exact_finish": 10,
+          "exact_prompt_tokens": 10,
+          "exact_tokens_and_finish": 10,
+          "baseline_latency_ms": 1136.3120682071894,
+          "eagle_latency_ms": 746.3864963501692,
+          "latency_speedup": 1.5224177738527649
+        },
+        "table": {
+          "total": 10,
+          "exact_tokens": 10,
+          "exact_finish": 10,
+          "exact_prompt_tokens": 10,
+          "exact_tokens_and_finish": 10,
+          "baseline_latency_ms": 5476.911828154698,
+          "eagle_latency_ms": 2400.017725303769,
+          "latency_speedup": 2.282029741035137
+        }
+      }
+    }
+  },
+  "whole_page": {
+    "unique_pages": 4,
+    "repeats": 2,
+    "total": 8,
+    "exact_results": 8,
+    "baseline_ms": 35005.036293528974,
+    "eagle_ms": 26379.22457791865,
+    "speedup": 1.326992618381617,
+    "layout": "PP-DocLayoutV3",
+    "postprocessing": "Official PaddleX VL-1.6 Markdown and JSON",
+    "same_physical_gpu_as_vlm": true,
+    "warmup_pages": 1
+  },
+  "long_context": {
+    "prompt_tokens": 3698,
+    "output_tokens": 1089,
+    "finish_reason": "stop",
+    "exact_tokens": true,
+    "timing_used_for_speed_claim": false
+  },
+  "steady_state": {
+    "baseline": {
+      "wall_ms": [
+        39383.66288691759,
+        39189.62043104693,
+        39209.99651099555
+      ],
+      "median_wall_ms": 39209.99651099555,
+      "exact_requests": 288
+    },
+    "public": {
+      "wall_ms": [
+        19931.039799004793,
+        19806.638719979674,
+        19835.505610099062
+      ],
+      "median_wall_ms": 19835.505610099062,
+      "exact_requests": 288
+    },
+    "unique_crops": 32,
+    "requests_per_trial": 96,
+    "trials_per_mode": 3,
+    "speedup": 1.9767581064851782,
+    "protocol": "Both modes fully warmed on the same 32 crops before three serial 96-request trials; ratio of median wall times; no simultaneous timed GPU jobs."
+  },
+  "cpu_checks": {
+    "unit_tests_019": 238,
+    "unit_tests_032": 238,
+    "native_build_contracts": 12,
+    "layout_environment_recovery_contracts": 9,
+    "all_passed": true,
+    "vllm032_gpu_rerun": false
+  },
+  "gpu_checks": {
+    "target_projection_cases": 405,
+    "target_projection_scope": "Current checkpoint layers 0/17 and output head; Q1..5; eager and changed-input graphs",
+    "native_ar1_attention_cases": 12,
+    "attention_metadata_cases": 624,
+    "greedy_rejection_cases": 200,
+    "draft_staging_cases": 288,
+    "speculative_metadata_cases": 64,
+    "actual_image_processor_cases": 36,
+    "public_packed_fa2_cases": 3656,
+    "public_graph_argmax_cases": 308,
+    "public_vision_scalar_cases": 30,
+    "all_passed": true
+  },
+  "packed_artifact": {
+    "library_sha256": "cb040df3dfb883a39ec5a0078ff26a2f71690e8af33e8a94c1275183a470dae5",
+    "nvcc": "12.8.93",
+    "flash_attention_commit": "29210221863736a08f71a866459e368ad1ac4a95",
+    "cutlass_commit": "62750a2b75c802660e4894434dc55e839f322277",
+    "scope": "Finite Q/K/V, supported SM80 profile. Known non-equivalence with nonfinite future V; no per-call isfinite scan."
+  },
+  "inherited_numeric_issue": {
+    "reproduced_on_unmodified_compatibility_commit": "f7cdb187ecfd1511f4e89e6a52cc73ab10e770ea",
+    "finding": "Native Q5 versus Q1 target projections changed whitespace and some page characters despite the earlier attention fix",
+    "resolution": "Mark actual target projections including the head, and prepare validated current CUDA12 Q1 cuBLASLt recipes before graph capture",
+    "wider_regression_now_exact": true
+  },
+  "exploratory_variants": [
+    {
+      "configuration": "Exact target projections, full Q5 K4 proposal graph, native AR1 attention",
+      "decision": "Reference optimization stage before packed/vision/argmax additions",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 22451.97984785773,
+      "speedup": 1.7585313735140216
+    },
+    {
+      "configuration": "Packed FA2 K4",
+      "decision": "Adopted as explicit optional kernel",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 20897.436830913648,
+      "speedup": 1.8893470658351637
+    },
+    {
+      "configuration": "Native AR1 K6",
+      "decision": "Not adopted; slower than K4",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 22847.16784907505,
+      "speedup": 1.7281140148651206
+    },
+    {
+      "configuration": "Packed FA2 K6",
+      "decision": "Not adopted; no clear advantage over final K4",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 20784.093747846782,
+      "speedup": 1.8996503498764647
+    },
+    {
+      "configuration": "Train-only 16k proposal subset plus packed/vision",
+      "decision": "Not adopted; head microbenchmark gain did not improve service latency",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 21026.25251514837,
+      "speedup": 1.8777721294613576
+    },
+    {
+      "configuration": "Train-only 8k proposal subset plus packed/vision",
+      "decision": "Not adopted; slower",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 21410.07949691266,
+      "speedup": 1.844108564176783
+    },
+    {
+      "configuration": "Full 40k, packed, argmax graph, vision scalar reuse",
+      "decision": "Integrated and retested through the public entrypoint",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 20504.462781129405,
+      "speedup": 1.9255569571078346
+    },
+    {
+      "configuration": "Q5 first pass, Q1 draft tail",
+      "decision": "Not adopted; slower than the complete Q5 path",
+      "requests": 96,
+      "exact": 96,
+      "baseline_wall_ms": 39482.51095996238,
+      "optimized_wall_ms": 21194.124886998907,
+      "speedup": 1.862898853831993
+    }
+  ],
+  "limitations": [
+    "All reported HTTP speedups compare serialized baseline and serialized EAGLE3 execution, not an existing batched HPS deployment.",
+    "The full-page benchmark disables pipeline queues and uses recognition concurrency 1; it cannot establish throughput gains at normal HPS concurrency.",
+    "Other workloads retained GPU memory; no claim of an exclusively reserved accelerator.",
+    "Repeated requests are not independent documents. The two crop sets contain 64 unique crops; page regression contains 4 unique pages.",
+    "Finite tests do not establish all-input token equality, all-workload twofold acceleration, or full-platform accuracy.",
+    "Packed attention has a documented nonfinite-activation counterexample and remains explicitly opt-in.",
+    "The complete 1355-page platform benchmark has not been rerun.",
+    "Training and teacher feature capture still use the separate original environment; this optimization changes inference execution, not checkpoint weights."
+  ],
+  "excluded_artifacts": [
+    "OCR text and token sequences",
+    "document images and per-document identifiers",
+    "model weights and teacher features",
+    "platform credentials",
+    "private dataset-derived proposal subsets"
+  ],
+  "profile": {
+    "scope": "Offline LLM path: PIL loading excluded; production engine configuration retained. CUDA-event intervals include CPU submission gaps; nested intervals are not additive.",
+    "stats": {
+      "control": {
+        "groups": {
+          "all": {
+            "requests": 4,
+            "wall_ms": 1560.1250699255615,
+            "output_tokens": 1583,
+            "prompt_tokens": 3561,
+            "length_capped": 1,
+            "renderer_ms": 112.13907855562866,
+            "input_process_ms": 0.6881209556013346,
+            "stages": {}
+          },
+          "ocr": {
+            "requests": 2,
+            "wall_ms": 303.640000987798,
+            "output_tokens": 177,
+            "prompt_tokens": 1924,
+            "length_capped": 0,
+            "renderer_ms": 61.06754578649998,
+            "input_process_ms": 0.35332096740603447,
+            "stages": {}
+          },
+          "table": {
+            "requests": 2,
+            "wall_ms": 1256.4850689377636,
+            "output_tokens": 1406,
+            "prompt_tokens": 1637,
+            "length_capped": 1,
+            "renderer_ms": 51.07153276912868,
+            "input_process_ms": 0.3347999881953001,
+            "stages": {}
+          }
+        },
+        "spec_decode_counters": {
+          "vllm:spec_decode_num_drafts": 449,
+          "vllm:spec_decode_num_draft_tokens": 1796,
+          "vllm:spec_decode_num_accepted_tokens": 1133
+        },
+        "draft_acceptance_fraction": 0.6308463251670379,
+        "mean_advance": 3.5233853006681515
+      },
+      "events": {
+        "groups": {
+          "all": {
+            "requests": 4,
+            "wall_ms": 1689.440282061696,
+            "output_tokens": 1583,
+            "prompt_tokens": 3561,
+            "length_capped": 1,
+            "renderer_ms": 112.23116889595985,
+            "input_process_ms": 0.8009399753063917,
+            "stages": {
+              "vision/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 153.7587184906006,
+                "cpu_submit_ms": 79.498898005113
+              },
+              "projector/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 2.238463968038559,
+                "cpu_submit_ms": 75.81544038839638
+              },
+              "encoder_total/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 158.91967964172363,
+                "cpu_submit_ms": 158.5540280211717
+              },
+              "target_forward/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 39.922688484191895,
+                "cpu_submit_ms": 39.9122170638293
+              },
+              "target_logits/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 0.9062399864196777,
+                "cpu_submit_ms": 0.5116621032357216
+              },
+              "execute_total/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 208.471040725708,
+                "cpu_submit_ms": 208.1821949686855
+              },
+              "target_sample/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 0.4638720005750656,
+                "cpu_submit_ms": 0.4648319445550442
+              },
+              "draft_propose/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 13.536255836486816,
+                "cpu_submit_ms": 13.539670966565609
+              },
+              "draft_total/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 15.081471920013428,
+                "cpu_submit_ms": 15.084383077919483
+              },
+              "sample_total/prefill": {
+                "calls": 4,
+                "gpu_stream_ms": 16.508927583694458,
+                "cpu_submit_ms": 16.510400222614408
+              },
+              "encoder_total/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 4.215360010508448,
+                "cpu_submit_ms": 6.0529999900609255
+              },
+              "target_forward/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 809.6819198131561,
+                "cpu_submit_ms": 14.464672189205885
+              },
+              "target_logits/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 69.16915313899517,
+                "cpu_submit_ms": 75.0862720888108
+              },
+              "execute_total/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 1060.6151661872864,
+                "cpu_submit_ms": 788.280290318653
+              },
+              "target_sample/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 11.11961629241705,
+                "cpu_submit_ms": 80.16743627376854
+              },
+              "draft_propose/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 251.96169692277908,
+                "cpu_submit_ms": 104.99256360344589
+              },
+              "draft_total/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 265.7832962870598,
+                "cpu_submit_ms": 268.98828870616853
+              },
+              "sample_total/decode": {
+                "calls": 453,
+                "gpu_stream_ms": 280.32921636104584,
+                "cpu_submit_ms": 435.5303219053894
+              },
+              "execute_total/idle": {
+                "calls": 4,
+                "gpu_stream_ms": 0.010240000206977129,
+                "cpu_submit_ms": 0.4760038573294878
+              }
+            }
+          },
+          "ocr": {
+            "requests": 2,
+            "wall_ms": 320.88805409148335,
+            "output_tokens": 177,
+            "prompt_tokens": 1924,
+            "length_capped": 0,
+            "renderer_ms": 60.89909095317125,
+            "input_process_ms": 0.3643080126494169,
+            "stages": {
+              "vision/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 80.62054252624512,
+                "cpu_submit_ms": 41.33371799252927
+              },
+              "projector/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 1.1059199571609497,
+                "cpu_submit_ms": 40.044029243290424
+              },
+              "encoder_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 83.40889549255371,
+                "cpu_submit_ms": 83.2323981449008
+              },
+              "target_forward/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 19.93932819366455,
+                "cpu_submit_ms": 19.939841935411096
+              },
+              "target_logits/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 0.4474879950284958,
+                "cpu_submit_ms": 0.25665899738669395
+              },
+              "execute_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 108.4323844909668,
+                "cpu_submit_ms": 108.29803789965808
+              },
+              "target_sample/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 0.22937600314617157,
+                "cpu_submit_ms": 0.22926181554794312
+              },
+              "draft_propose/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 6.639616012573242,
+                "cpu_submit_ms": 6.641581188887358
+              },
+              "draft_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 7.434239864349365,
+                "cpu_submit_ms": 7.435095030814409
+              },
+              "sample_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 8.153087854385376,
+                "cpu_submit_ms": 8.154412033036351
+              },
+              "encoder_total/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 0.48243200220167637,
+                "cpu_submit_ms": 0.6076630670577288
+              },
+              "target_forward/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 81.50323224067688,
+                "cpu_submit_ms": 1.45985116250813
+              },
+              "target_logits/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 7.049216091632843,
+                "cpu_submit_ms": 7.773017743602395
+              },
+              "execute_total/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 111.96108794212341,
+                "cpu_submit_ms": 81.3380186446011
+              },
+              "target_sample/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 1.1376640181988478,
+                "cpu_submit_ms": 8.284185314550996
+              },
+              "draft_propose/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 25.486720085144043,
+                "cpu_submit_ms": 10.97332057543099
+              },
+              "draft_total/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 26.88102412223816,
+                "cpu_submit_ms": 27.93200477026403
+              },
+              "sample_total/decode": {
+                "calls": 46,
+                "gpu_stream_ms": 28.36889612674713,
+                "cpu_submit_ms": 45.03775597549975
+              },
+              "execute_total/idle": {
+                "calls": 2,
+                "gpu_stream_ms": 0.0051200001034885645,
+                "cpu_submit_ms": 0.22964202798902988
+              }
+            }
+          },
+          "table": {
+            "requests": 2,
+            "wall_ms": 1368.5522279702127,
+            "output_tokens": 1406,
+            "prompt_tokens": 1637,
+            "length_capped": 1,
+            "renderer_ms": 51.3320779427886,
+            "input_process_ms": 0.4366319626569748,
+            "stages": {
+              "vision/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 73.13817596435547,
+                "cpu_submit_ms": 38.16518001258373
+              },
+              "projector/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 1.1325440108776093,
+                "cpu_submit_ms": 35.77141114510596
+              },
+              "encoder_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 75.51078414916992,
+                "cpu_submit_ms": 75.32162987627089
+              },
+              "target_forward/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 19.983360290527344,
+                "cpu_submit_ms": 19.972375128418207
+              },
+              "target_logits/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 0.45875199139118195,
+                "cpu_submit_ms": 0.25500310584902763
+              },
+              "execute_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 100.03865623474121,
+                "cpu_submit_ms": 99.88415706902742
+              },
+              "target_sample/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 0.23449599742889404,
+                "cpu_submit_ms": 0.23557012900710106
+              },
+              "draft_propose/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 6.896639823913574,
+                "cpu_submit_ms": 6.898089777678251
+              },
+              "draft_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 7.6472320556640625,
+                "cpu_submit_ms": 7.649288047105074
+              },
+              "sample_total/prefill": {
+                "calls": 2,
+                "gpu_stream_ms": 8.355839729309082,
+                "cpu_submit_ms": 8.355988189578056
+              },
+              "encoder_total/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 3.7329280083067715,
+                "cpu_submit_ms": 5.445336923003197
+              },
+              "target_forward/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 728.1786875724792,
+                "cpu_submit_ms": 13.004821026697755
+              },
+              "target_logits/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 62.11993704736233,
+                "cpu_submit_ms": 67.3132543452084
+              },
+              "execute_total/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 948.654078245163,
+                "cpu_submit_ms": 706.9422716740519
+              },
+              "target_sample/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 9.981952274218202,
+                "cpu_submit_ms": 71.88325095921755
+              },
+              "draft_propose/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 226.47497683763504,
+                "cpu_submit_ms": 94.0192430280149
+              },
+              "draft_total/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 238.90227216482162,
+                "cpu_submit_ms": 241.0562839359045
+              },
+              "sample_total/decode": {
+                "calls": 407,
+                "gpu_stream_ms": 251.9603202342987,
+                "cpu_submit_ms": 390.4925659298897
+              },
+              "execute_total/idle": {
+                "calls": 2,
+                "gpu_stream_ms": 0.0051200001034885645,
+                "cpu_submit_ms": 0.24636182934045792
+              }
+            }
+          }
+        },
+        "spec_decode_counters": {
+          "vllm:spec_decode_num_drafts": 449,
+          "vllm:spec_decode_num_draft_tokens": 1796,
+          "vllm:spec_decode_num_accepted_tokens": 1133
+        },
+        "draft_acceptance_fraction": 0.6308463251670379,
+        "mean_advance": 3.5233853006681515
+      }
+    },
+    "repeat_outputs_equal": true,
+    "execution_audit": {
+      "full_draft_graphs": {
+        "512": {
+          "captures": 1,
+          "replays": 117
+        },
+        "1024": {
+          "captures": 1,
+          "replays": 315
+        },
+        "2048": {
+          "captures": 1,
+          "replays": 723
+        },
+        "4096": {
+          "captures": 1,
+          "replays": 203
+        }
+      },
+      "full_draft_graph_counts": {
+        "fallback_prefill_or_non_b1": 12,
+        "captures": 4,
+        "replays": 1358
+      },
+      "sampler_graph_counts": {
+        "fallback_calls": 2,
+        "fallback_ineligible": 2,
+        "prepared_plans": 1,
+        "graph_argmax_calls": 1358
+      },
+      "vision_scalar": {
+        "installed": true,
+        "enabled": true,
+        "hook_identity_ok": true,
+        "native_method_identity_ok": true,
+        "scope": "native PaddleOCR-VL Siglip 27 layers, TP1, BF16 H16 D72, FA2, B1",
+        "max_seqlen_source": "actual CUDA scalar; one item per encoder forward",
+        "cache_lifetime": "fresh per-forward ContextVar; no cross-forward cache",
+        "attention_path": "original custom op with CPU int32 scalar",
+        "gpu_workspace_bytes": 0,
+        "cuda_graph_supported": false,
+        "encoder_scopes": 13,
+        "encoder_fallbacks": 0,
+        "gpu_scalar_reads": 13,
+        "scalar_cache_hits": 338,
+        "native_attention_calls": 351,
+        "attention_fallbacks": 0,
+        "metadata_identity_fallbacks": 0
+      }
+    }
+  },
+  "crop_steady_twofold_demonstrated": false,
+  "overall_stable_twofold_demonstrated": false,
+  "vision_encoder_graph_experiments": {
+    "scope": "Isolated prototypes; same 32-crop benchmark. Cold timing includes new graph capture and additional changed-input audits.",
+    "variants": [
+      {
+        "configuration": "All eligible visual lengths with recursive model checks",
+        "prototype": true,
+        "cold_wall_ms": 24419.85662188381,
+        "steady_wall_ms": [
+          20328.790053958073,
+          20988.071558065712,
+          20563.53811896406
+        ],
+        "median_steady_wall_ms": 20563.53811896406,
+        "steady_speedup": 1.9067728658442973,
+        "exact_steady_requests": 288,
+        "decision": "Not adopted; no service improvement over scalar-only"
+      },
+      {
+        "configuration": "All eligible visual lengths with flattened model checks",
+        "prototype": true,
+        "cold_wall_ms": 23676.768593955785,
+        "steady_wall_ms": [
+          19844.170606927946,
+          19947.53400492482,
+          19832.494637928903
+        ],
+        "median_steady_wall_ms": 19844.170606927946,
+        "steady_speedup": 1.97589495109998,
+        "exact_steady_requests": 288,
+        "decision": "Not adopted; no service improvement over scalar-only"
+      },
+      {
+        "configuration": "Visual lengths at most 2048 with flattened model checks",
+        "prototype": true,
+        "cold_wall_ms": 22210.045042913407,
+        "steady_wall_ms": [
+          19461.243745172396,
+          19490.948270075023,
+          19461.853974033147
+        ],
+        "median_steady_wall_ms": 19461.853974033147,
+        "steady_speedup": 2.0147102410341398,
+        "exact_steady_requests": 288,
+        "decision": "Short-sequence approach selected; public memory policy restricted further after a colocated layout OOM"
+      }
+    ],
+    "guard_cpu_us": {
+      "repeats": 100,
+      "module_count": 301,
+      "tensor_count": 325,
+      "gpu_work": false,
+      "guard_speedup": 3.166507148466622,
+      "stronger_checks": "dict keysets, opaque public attribute identity and registration-map identity are additionally frozen",
+      "old_signature": {
+        "mean_us": 6062.15168,
+        "median_us": 6046.1145,
+        "min_us": 5963.066,
+        "max_us": 6509.877
+      },
+      "fast_matches": {
+        "mean_us": 1913.09725,
+        "median_us": 1909.3955,
+        "min_us": 1888.494,
+        "max_us": 2096.256
+      }
+    },
+    "component_benchmark": {
+      "records": [
+        {
+          "hidden": [
+            1,
+            600,
+            1152
+          ],
+          "raw_bits_exact": true,
+          "repeats": 20,
+          "native_stack": {
+            "wall_us": 14983.94295340404,
+            "cpu_submit_us": 14981.12465487793,
+            "gpu_stream_span_us": 14982.3486328125
+          },
+          "graph_copy_replay_clone": {
+            "wall_us": 6055.137352086604,
+            "cpu_submit_us": 973.7743996083736,
+            "gpu_stream_span_us": 6053.478240966797
+          }
+        },
+        {
+          "hidden": [
+            1,
+            5040,
+            1152
+          ],
+          "raw_bits_exact": true,
+          "repeats": 20,
+          "native_stack": {
+            "wall_us": 57030.0062536262,
+            "cpu_submit_us": 50323.53369751945,
+            "gpu_stream_span_us": 57027.227783203125
+          },
+          "graph_copy_replay_clone": {
+            "wall_us": 56664.84170360491,
+            "cpu_submit_us": 32.862648367881775,
+            "gpu_stream_span_us": 56662.68310546875
+          }
+        }
+      ],
+      "includes_input_copies_and_output_clone": true,
+      "includes_immutable_guard": false
+    },
+    "interpretation": "Small visual sequences benefited from reduced CPU submission overhead; long visual sequences did not. Shape-limited capture avoids paying model checks on long inputs.",
+    "rejected_memory_policy": {
+      "max_cached_bytes": 1610612736,
+      "minimum_free_bytes": 536870912,
+      "finding": "After main and independent crop warmup, the VLM left about 939 MiB free; DocLayoutV3 ran out of memory during its first warmup before sending VLM requests.",
+      "completed_whole_page_measurements": 0,
+      "decision": "Not retained. Final public policy limits graph cache to 1 GiB and requires 1.5 GiB free before capture; the same crop-then-layout order is retested.",
+      "public_crop_steady_wall_ms": [
+        19561.255756998435,
+        19471.945773111656,
+        19394.162110053003
+      ],
+      "public_crop_steady_speedup": 2.003864992572745,
+      "decision_includes_layout_memory_requirement": true
+    }
+  },
+  "optional_vision_graph_configuration": {
+    "enabled_by_default": false,
+    "cli": "--vllm019-vision-graphs",
+    "policy": {
+      "max_graphs": 32,
+      "max_cached_bytes": 1073741824,
+      "max_sequence_length": 2048,
+      "minimum_reuse": 2,
+      "minimum_free_bytes": 1610612736,
+      "actual_raw_bit_admission": true,
+      "clone_output": true,
+      "audit_changed_inputs": 0
+    },
+    "public_entrypoint": true,
+    "packed_attention_enabled": true,
+    "scope": "Additional opt-in on top of the scalar-only final configuration above; identical checkpoint weights, resolution and native vision operators.",
+    "steady_state": {
+      "unique_crops": 32,
+      "requests_per_trial": 96,
+      "trials_per_mode": 3,
+      "baseline_wall_ms": [
+        39158.68028695695,
+        38997.37573298626,
+        39019.15047201328
+      ],
+      "optimized_wall_ms": [
+        19943.496631924063,
+        19657.00117405504,
+        19545.686300145462
+      ],
+      "baseline_median_ms": 39019.15047201328,
+      "optimized_median_ms": 19657.00117405504,
+      "median_speedup": 1.9850001598165457,
+      "baseline_exact_requests": 288,
+      "optimized_exact_requests": 288,
+      "protocol": "Fresh baseline confirmation followed by final public opt-in service; both fully warmed before three serial trials; no concurrent timed GPU jobs or CPU test suites."
+    },
+    "first_use": {
+      "wall_ms": 21569.452442927286,
+      "requests": 96,
+      "exact_requests": 96,
+      "mandatory_actual_input_audit": true,
+      "additional_changed_input_audits": 0,
+      "first_use_capture_included": true,
+      "warmup_requests": 1
+    },
+    "independent_crops": {
+      "unique_crops": 32,
+      "baseline_wall_ms": 9122.161449864507,
+      "runs": [
+        {
+          "phase": "First pass on the independent set",
+          "wall_ms": 4900.781593983993,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.861368696997743
+        },
+        {
+          "phase": "Second pass; additional shapes may capture",
+          "wall_ms": 5111.96769005619,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.7844716561117853
+        },
+        {
+          "phase": "Third pass after both earlier passes",
+          "wall_ms": 4780.628588981926,
+          "exact_requests": 32,
+          "speedup_against_recorded_baseline": 1.9081510475188672
+        }
+      ],
+      "note": "These use the same previously recorded independent baseline; second-pass capture cost is retained and not presented as fully warmed performance."
+    },
+    "whole_page": {
+      "unique_pages": 4,
+      "repeats": 2,
+      "exact_requests": 8,
+      "baseline_ms": 35005.036293528974,
+      "optimized_ms": 24119.63316379115,
+      "speedup": 1.4513088178338962,
+      "warmup_pages": 1,
+      "layout": "PP-DocLayoutV3",
+      "postprocessing": "Official PaddleX Markdown and JSON",
+      "baseline": "Same previously recorded whole-page baseline"
+    },
+    "long_context": {
+      "prompt_tokens": 3698,
+      "output_tokens": 1089,
+      "finish_reason": "stop",
+      "exact_tokens": true,
+      "timing_used_for_speed_claim": false
+    },
+    "limitations": [
+      "The main crop steady median is close to the twofold boundary and can vary with load and input distribution.",
+      "First-use capture and audits can make new-shape workloads slower; extra graph memory is required.",
+      "No twofold claim for all inputs, the independent set, whole pages or the full platform benchmark."
+    ]
+  },
+  "evaluation_topology": {
+    "baseline_http_generation_serialized": true,
+    "optimized_http_generation_serialized": true,
+    "crop_client_concurrency": 1,
+    "whole_page_pipeline_batch_size": 1,
+    "whole_page_pipeline_use_queues": false,
+    "whole_page_recognition_max_concurrency": 1,
+    "comparison_against_hps_continuous_batching": false,
+    "hps_throughput_speedup_demonstrated": false,
+    "scope_clarified_on": "2026-11-17",
+    "measured_timings_changed": false
+  }
+}

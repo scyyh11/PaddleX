@@ -320,15 +320,39 @@ def main():
     )
     parser.add_argument("--model-version", choices=("1.6",), default="1.6")
     parser.add_argument("--recovery-decode-graphs", choices=("bf16", "int8"))
+    parser.add_argument("--vllm019-packed-attention-library", type=Path)
+    parser.add_argument("--vllm019-vision-graphs", action="store_true")
     parser.add_argument(
         "--hps-max-completion-tokens", type=int, choices=(1024, 4096, 8192)
     )
     parser.add_argument("--queue-size", type=int, choices=range(33), default=8)
+    parser.add_argument("--gpu-memory-utilization", type=float, default=0.45)
+    parser.add_argument("--kv-cache-memory-mib", type=int, default=4096)
     args = parser.parse_args()
     if args.gpu < 0 or not 1 <= args.port <= 65535:
         parser.error("Choose a valid GPU index and port")
+    if not 0 < args.gpu_memory_utilization <= 1 or args.kv_cache_memory_mib <= 0:
+        parser.error(
+            "Choose a GPU memory fraction in (0, 1] and a positive KV cache size"
+        )
     if args.recovery_decode_graphs and args.mode != "eagle3-recovery":
         parser.error("--recovery-decode-graphs requires --mode eagle3-recovery")
+    if args.vllm019_packed_attention_library is not None and (
+        args.mode != "eagle3-recovery"
+        or args.recovery_decode_graphs not in (None, "int8")
+        or args.hps_max_completion_tokens not in (None, 1024, 8192)
+    ):
+        parser.error(
+            "--vllm019-packed-attention-library requires recovery/int8 and context 4096 or 12288"
+        )
+    if args.vllm019_vision_graphs and (
+        args.mode != "eagle3-recovery"
+        or args.recovery_decode_graphs not in (None, "int8")
+        or args.hps_max_completion_tokens not in (None, 1024, 8192)
+    ):
+        parser.error(
+            "--vllm019-vision-graphs requires recovery/int8 and context 4096 or 12288"
+        )
     cmd = [
         sys.executable,
         "-u",
@@ -343,9 +367,20 @@ def main():
         str(args.queue_size),
         "--model-version",
         args.model_version,
+        "--gpu-memory-utilization",
+        str(args.gpu_memory_utilization),
+        "--kv-cache-memory-mib",
+        str(args.kv_cache_memory_mib),
     ]
     if args.recovery_decode_graphs:
         cmd += ["--recovery-decode-graphs", args.recovery_decode_graphs]
+    if args.vllm019_packed_attention_library is not None:
+        cmd += [
+            "--vllm019-packed-attention-library",
+            str(args.vllm019_packed_attention_library.expanduser().resolve()),
+        ]
+    if args.vllm019_vision_graphs:
+        cmd.append("--vllm019-vision-graphs")
     if args.hps_max_completion_tokens is not None:
         cmd += ["--hps-max-completion-tokens", str(args.hps_max_completion_tokens)]
     stop = threading.Event()

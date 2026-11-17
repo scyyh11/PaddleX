@@ -1,0 +1,101 @@
+{
+  "cases": [
+    {
+      "bound": 4096,
+      "queries": 2,
+      "kv_length": 64,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 4096,
+      "queries": 2,
+      "kv_length": 3916,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 4096,
+      "queries": 2,
+      "kv_length": 4096,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 4096,
+      "queries": 5,
+      "kv_length": 64,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 4096,
+      "queries": 5,
+      "kv_length": 3916,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 4096,
+      "queries": 5,
+      "kv_length": 4096,
+      "splits": 32,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 2,
+      "kv_length": 64,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 2,
+      "kv_length": 3916,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 2,
+      "kv_length": 12288,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 5,
+      "kv_length": 64,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 5,
+      "kv_length": 3916,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    },
+    {
+      "bound": 12288,
+      "queries": 5,
+      "kv_length": 12288,
+      "splits": 96,
+      "exact": true,
+      "max_abs": 0.0
+    }
+  ],
+  "all_exact": true
+}

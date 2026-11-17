@@ -1,0 +1,14 @@
+# Separate environment for the vLLM 0.19.0 compatibility path (Python 3.12).
+# Use the CUDA 12.8 wheels required by this vLLM release.
+vllm==0.19.0
+torch==2.10.0
+torchvision==0.25.0
+transformers==4.57.6
+triton==3.6.0
+nvidia-cublas-cu12==12.8.4.1
+pydantic==2.14.3
+fastapi==0.163.1
+uvicorn==0.54.0
+python-multipart==0.0.33
+Pillow==13.0.0
+httpx==0.28.1

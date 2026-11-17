@@ -14,9 +14,9 @@
 
 """Portable configuration for the frozen VL-1.6 EAGLE3 service.
 
-This replaces the development CLI's dependency on experiment manifests and
-precompiled benchmark binaries. The service continues to use vLLM's native
-image processor and the same decode-only CUDA graph worker.
+The service selects a validated worker and graph configuration for each pinned
+runtime. Source, dependency, model and optional packed-kernel identities are
+included in the cache fingerprint; development experiment manifests are unused.
 """
 from __future__ import annotations
 
@@ -37,6 +37,19 @@ DEFAULT_DRAFT = Path(
     )
 ).expanduser()
 DEFAULT_EXTENSION = "hps_decode_graph_int8_worker.DecodeGraphInt8Worker"
+VISION_GRAPHS_ENV = "PADDLEOCR_VLLM019_VISION_GRAPHS"
+# This fixed policy is also reported by the worker. The implementation source is
+# hashed below, so changing its admission or cache policy invalidates old keys.
+VISION_GRAPHS_POLICY = {
+    "max_graphs": 32,
+    "max_cached_bytes": 1024 * 1024**2,
+    "max_sequence_length": 2048,
+    "minimum_reuse": 2,
+    "minimum_free_bytes": 1536 * 1024**2,
+    "actual_raw_bit_admission": True,
+    "clone_output": True,
+    "audit_changed_inputs": 0,
+}
 PROMPTS = {
     "ocr": "OCR:",
     "table": "Table Recognition:",
@@ -48,6 +61,14 @@ PINNED_VERSIONS = {
     "transformers": "5.19.0",
     "triton": "3.7.1",
     "nvidia-cublas": "13.1.1.3",
+}
+PINNED_VERSIONS_019 = {
+    "vllm": "0.19.0",
+    "torch": "2.10.0",
+    "transformers": "4.57.6",
+    "triton": "3.6.0",
+    "nvidia-cublas-cu12": "12.8.4.1",
+    "pydantic": "2.14.3",
 }
 RUNTIME_SOURCES = (
     "runtime_config.py",
@@ -64,6 +85,49 @@ RUNTIME_SOURCES = (
     "hps_decode_graph_eagle_worker.py",
     "hps_decode_graph_int8_worker.py",
 )
+
+
+def runtime_version():
+    version = importlib.metadata.version("vllm")
+    if version not in ("0.19.0", "0.32.0"):
+        raise RuntimeError(f"Unsupported vLLM runtime: {version}")
+    return version
+
+
+def is_vllm019():
+    return runtime_version() == "0.19.0"
+
+
+def validate_vision_graph_configuration(args, config, *, version):
+    """Validate the opt-in after resolving the service's native engine config."""
+    if not getattr(args, "vllm019_vision_graphs", False):
+        return
+    spec = config.get("speculative_config", {})
+    compilation = config.get("compilation_config", {})
+    if (
+        version != "0.19.0"
+        or getattr(args, "model_version", "1.6") != "1.6"
+        or getattr(args, "mode", None) not in ("eagle3-recovery", "accelerated")
+        or getattr(args, "recovery_decode_graphs", None) != "int8"
+        or config.get("worker_extension_cls")
+        != "hps_vllm019_int8_worker.Vllm019Int8Worker"
+        or config.get("max_num_seqs") != 1
+        or config.get("tensor_parallel_size") != 1
+        or config.get("max_model_len") not in (4096, 12288)
+        or config.get("dtype") != "bfloat16"
+        or config.get("async_scheduling") is not True
+        or config.get("enforce_eager") is not False
+        or spec.get("method") != "eagle3"
+        or spec.get("num_speculative_tokens") != 4
+        or spec.get("use_local_argmax_reduction") is not True
+        or compilation.get("mode") != 3
+        or compilation.get("cudagraph_mode") != "FULL_AND_PIECEWISE"
+        or compilation.get("cudagraph_capture_sizes") != [5]
+    ):
+        raise ValueError(
+            "--vllm019-vision-graphs requires VL-1.6 on vLLM 0.19 recovery/int8, "
+            "B1/K4/TP1 BF16 with async Q5 decode graphs and context 4096 or 12288"
+        )
 
 
 def engine_config(args):
@@ -84,18 +148,19 @@ def engine_config(args):
         max_model_len=4096,
         max_num_seqs=8,
         max_num_batched_tokens=4096,
-        gpu_memory_utilization=0.45,
-        kv_cache_memory_bytes=4294967296,
+        gpu_memory_utilization=getattr(args, "gpu_memory_utilization", 0.45),
+        kv_cache_memory_bytes=getattr(args, "kv_cache_memory_mib", 4096) * 1024 * 1024,
         enable_prefix_caching=False,
         mm_processor_cache_gb=0,
         enforce_eager=False,
         limit_mm_per_prompt={"image": 1},
         disable_log_stats=False,
-        per_request_spec_decode_metrics=(
-            "none" if args.mode == "baseline" else "summary"
-        ),
         max_cudagraph_capture_size=80,
     )
+    if not is_vllm019():
+        config["per_request_spec_decode_metrics"] = (
+            "none" if args.mode == "baseline" else "summary"
+        )
     if args.mode != "baseline":
         config["worker_extension_cls"] = args.worker_extension
         config["speculative_config"] = dict(
@@ -103,33 +168,83 @@ def engine_config(args):
             model=str(args.draft_model.resolve()),
             num_speculative_tokens=args.k,
             use_local_argmax_reduction=True,
-            draft_sample_method="greedy",
-            enable_adaptive_verification=False,
         )
+        if not is_vllm019():
+            config["speculative_config"].update(
+                draft_sample_method="greedy", enable_adaptive_verification=False
+            )
     return config
 
 
 def configure_environment(args, config):
     # This runs before CUDA/vLLM imports, including imports in spawned workers.
-    versions = {name: importlib.metadata.version(name) for name in PINNED_VERSIONS}
+    legacy = is_vllm019()
+    pins = PINNED_VERSIONS_019 if legacy else PINNED_VERSIONS
+    versions = {name: importlib.metadata.version(name) for name in pins}
     mismatches = {
-        name: (PINNED_VERSIONS[name], actual)
+        name: (pins[name], actual)
         for name, actual in versions.items()
-        if actual != PINNED_VERSIONS[name]
+        if actual != pins[name]
     }
     if mismatches:
         raise RuntimeError(
             f"Unvalidated runtime versions (expected, actual): {mismatches}"
         )
+    from vllm019_packed_attention import (
+        LIBRARY_ENV,
+        SOURCE_NAMES as PACKED_SOURCES,
+        validate_configuration,
+        verify_artifact,
+    )
+
+    validate_configuration(args, config, version=versions["vllm"])
+    validate_vision_graph_configuration(args, config, version=versions["vllm"])
+    vision_graphs = bool(getattr(args, "vllm019_vision_graphs", False))
+    packed_path = getattr(args, "vllm019_packed_attention_library", None)
+    packed_artifact = (
+        verify_artifact(packed_path, bundle_root=ROOT / "kernels/fa2_sm80")
+        if packed_path is not None
+        else None
+    )
+    source_names = RUNTIME_SOURCES + (
+        (
+            "vllm019_model.py",
+            "hps_vllm019_worker.py",
+            "hps_vllm019_int8_worker.py",
+            "vllm019_ar1_attention.py",
+            "vllm019_draft_loop.py",
+            "vllm019_draft_full_graph.py",
+            "vllm019_draft_graph_buckets.py",
+            "vllm019_draft_staging.py",
+            "vllm019_attention_metadata.py",
+            "vllm019_greedy_sampler.py",
+            "vllm019_spec_metadata.py",
+            "vllm019_image_lut.py",
+            "vllm019_locked_lt.py",
+            "vllm019_target_linear.py",
+            "vllm019_stable_argmax.py",
+            "vllm019_graph_argmax.py",
+            "vllm019_sampler_graph.py",
+            "vllm019_vision_scalar.py",
+            "vllm019_vision_graph.py",
+        )
+        + PACKED_SOURCES
+        if legacy
+        else ()
+    )
     sources = {
         name: hashlib.sha256((ROOT / "scripts" / name).read_bytes()).hexdigest()
-        for name in RUNTIME_SOURCES
+        for name in source_names
     }
     basis = dict(
         engine_config=config,
         runtime_package_versions=versions,
         current_dependency_sha256=sources,
     )
+    if packed_artifact is not None:
+        basis["packed_attention"] = packed_artifact
+    if legacy:
+        basis["vision_graphs"] = dict(enabled=vision_graphs, **VISION_GRAPHS_POLICY)
     fingerprint = hashlib.sha256(json.dumps(basis, sort_keys=True).encode()).hexdigest()
     cache = (
         getattr(args, "cache_root", None) or ROOT / "runtime_cache" / fingerprint[:20]
@@ -142,7 +257,15 @@ def configure_environment(args, config):
         VLLM_BATCH_INVARIANT="0",
         VLLM_WORKER_MULTIPROC_METHOD="spawn",
         VLLM_PLUGINS="",
+        VLLM_USE_V2_MODEL_RUNNER="0" if legacy else "1",
     )
+    # A stale environment variable must never enable an opt-in kernel.
+    if packed_artifact is None:
+        os.environ.pop(LIBRARY_ENV, None)
+    else:
+        os.environ[LIBRARY_ENV] = packed_artifact["library"]
+    # Explicit zero overrides any inherited opt-in, including in non-0.19 runs.
+    os.environ[VISION_GRAPHS_ENV] = "1" if vision_graphs else "0"
     scripts = str(ROOT / "scripts")
     search_paths = [p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p]
     os.environ["PYTHONPATH"] = os.pathsep.join(
