@@ -2,7 +2,11 @@
 
 `--cpu-grid` / `PADDLEX_HPS_CPU_GRID=1` 默认关闭，只将原 multimodal processor 的 `image_grid_thw` 字段标为 `keep_on_cpu=True`。像素仍进入 GPU；模型方法、视觉 batching、投影 GEMM 的形状和调用顺序、dtype、权重和解码设置保持不变。该选项可用于 baseline 或 EAGLE3。
 
-当前实验未显示显著端到端收益。A100 上的 VL-1.8 + DocLayoutV4、原镜像、原 PaddleX batching 插件、OXR 100 页对照中，CPU-grid 两轮分别为 40.996 / 37.184 秒，每轮 100 页成功、1936 个裁片；均值 39.090 秒，与原配置均值 39.133 秒接近。这些结果不支持宣称已提速，更不支持两倍加速。
+当前实验未显示显著端到端收益。A100 上的 VL-1.8 + DocLayoutV4、原镜像、原 PaddleX batching 插件、OXR 100 页对照中，最早的 CPU-grid 两轮分别为 40.996 / 37.184 秒，每轮 100 页成功、1936 个裁片；均值 39.090 秒，与原配置均值 39.133 秒接近。这组测试实际仍是单 API 进程。
+
+后续补测实际 API4 组合：同一份代码、原 token 预算 131072，只切换 CPU-grid 开关，关闭时为 35.819 / 36.105 秒，开启时为 36.290 / 34.750 秒。四轮均成功完成 100 页、1936 裁片。均值从 35.962 降到 35.520 秒，约 1.012 倍；候选两轮相差 1.540 秒，大于 0.442 秒的均值改善，尚不足以认定稳定提速，更未达到两倍加速。
+
+两组首轮使用原 OmniDocBench1.6 scorer、同一 100 页 GT 评分，Overall 分别为 96.2714 / 96.4462；未观察到 GT 精度下降。公式分数相同，文本与表格分数有变化，整页输出并非位级相同。控制组自身两轮也只有 76/100 页 Markdown 完全一致，因此不能把这次分差归因于 CPU-grid 的精度收益。评分核对了实际计时输出的 100 个 SHA256，内部超时、错误及异常计数均为零。
 
 ## 动机与验证范围
 
@@ -10,7 +14,7 @@
 
 该 profile 中 `cudaStreamSynchronize` 的 CPU 累计跨度约为 7.353 秒。这包含等待已有 GPU 计算的时间，不能加到 GPU kernel 时间上，也不能视为必然可消除的端到端耗时。profile 采集开销和可能并行的诊断任务使它不适合作为正式速度成绩。
 
-原 vLLM 0.19.0 / Torch cu129 镜像中的 8 项 CPU 检查通过，包括真实 multimodal collation 的设备路由。随后在独立 A100 上使用真实 VL-1.8 权重、原批量视觉插件，对 32 个 holdout 裁片分别以 B1、B4、B8 比较 GPU-grid 和 CPU-grid：96/96 对 vision + projector embedding 满足 `torch.equal`，最大绝对差为 0。此结果覆盖这些输入与 batch 形状，不等于对任意输入的证明，也不替代完整 OCR 精度评测。
+原 vLLM 0.19.0 / Torch cu129 镜像中的 8 项 CPU 检查通过，包括真实 multimodal collation 的设备路由。随后在独立 A100 上使用真实 VL-1.8 权重、原批量视觉插件，对 32 个裁片分别以 B1、B4、B8 比较 GPU-grid 和 CPU-grid：96/96 对 vision + projector embedding 满足 `torch.equal`，最大绝对差为 0。数值对照样本有 4 页与冻结 100 页重合，不能视为独立的精度验证集。此结果覆盖这些输入与 batch 形状，不等于对任意输入的证明，也不替代完整 OCR 精度评测。
 
 ## 启用与兼容边界
 
