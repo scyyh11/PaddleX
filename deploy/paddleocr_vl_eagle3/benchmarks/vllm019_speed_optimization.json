@@ -1,6 +1,6 @@
 {
   "date": "2026-11-16",
-  "scope": "Single-A100 vLLM 0.19.0 PaddleOCR-VL-1.6 optimization; finite regression evidence, not an all-document accuracy or speed guarantee",
+  "scope": "B1 request-latency experiment on a single A100 with vLLM 0.19.0 and PaddleOCR-VL-1.6; baseline and EAGLE3 services both serialize generation. Not a throughput comparison against an existing HPS continuous-batching deployment.",
   "environment": {
     "gpu": "NVIDIA A100 80GB PCIe",
     "sm": 80,
@@ -316,6 +316,8 @@
     }
   ],
   "limitations": [
+    "All reported HTTP speedups compare serialized baseline and serialized EAGLE3 execution, not an existing batched HPS deployment.",
+    "The full-page benchmark disables pipeline queues and uses recognition concurrency 1; it cannot establish throughput gains at normal HPS concurrency.",
     "Other workloads retained GPU memory; no claim of an exclusively reserved accelerator.",
     "Repeated requests are not independent documents. The two crop sets contain 64 unique crops; page regression contains 4 unique pages.",
     "Finite tests do not establish all-input token equality, all-workload twofold acceleration, or full-platform accuracy.",
@@ -979,5 +981,17 @@
       "First-use capture and audits can make new-shape workloads slower; extra graph memory is required.",
       "No twofold claim for all inputs, the independent set, whole pages or the full platform benchmark."
     ]
+  },
+  "evaluation_topology": {
+    "baseline_http_generation_serialized": true,
+    "optimized_http_generation_serialized": true,
+    "crop_client_concurrency": 1,
+    "whole_page_pipeline_batch_size": 1,
+    "whole_page_pipeline_use_queues": false,
+    "whole_page_recognition_max_concurrency": 1,
+    "comparison_against_hps_continuous_batching": false,
+    "hps_throughput_speedup_demonstrated": false,
+    "scope_clarified_on": "2026-11-17",
+    "measured_timings_changed": false
   }
 }
