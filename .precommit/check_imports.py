@@ -128,6 +128,7 @@ MANUALLY_MANAGED_OPTIONAL_HEAVY_MODS = {
     "ultra_infer",
     "fastdeploy",
     "onnxruntime",
+    "triton",  # Provided by the version-pinned vLLM/Torch runtime.
 }
 
 

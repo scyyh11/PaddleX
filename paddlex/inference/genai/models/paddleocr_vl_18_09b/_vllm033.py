@@ -20,22 +20,26 @@ FP32 RoPE experiment. The vision encoder override is version-pinned because
 its batch layout and FlashAttention metadata are vLLM implementation details.
 """
 
-import torch
-import triton
-import triton.language as tl
-from vllm.model_executor.models.paddleocr_vl import (
-    AttentionBackendEnum,
-    PaddleOCRVLDummyInputsBuilder,
-    PaddleOCRVLForConditionalGeneration,
-    PaddleOCRVLMultiModalProcessor,
-    PaddleOCRVLProcessingInfo,
-    SiglipAttention,
-    SiglipEncoder,
-    async_tensor_h2d,
-)
-from vllm.multimodal import MULTIMODAL_REGISTRY
-
 from .....utils import logging
+from .....utils.deps import is_vllm_performance_version
+
+if not is_vllm_performance_version():
+    raise ImportError("This PaddleX vision plugin requires vLLM 0.33.0.")
+else:
+    import torch
+    import triton
+    import triton.language as tl
+    from vllm.model_executor.models.paddleocr_vl import (
+        AttentionBackendEnum,
+        PaddleOCRVLDummyInputsBuilder,
+        PaddleOCRVLForConditionalGeneration,
+        PaddleOCRVLMultiModalProcessor,
+        PaddleOCRVLProcessingInfo,
+        SiglipAttention,
+        SiglipEncoder,
+        async_tensor_h2d,
+    )
+    from vllm.multimodal import MULTIMODAL_REGISTRY
 
 
 @triton.jit
