@@ -782,6 +782,31 @@ docker run \
     paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --host 0.0.0.0 --port 8118 --backend vllm
 ```
 
+
+<details>
+<summary>Optional: vLLM 0.33.0 performance profile on A100 (PaddleOCR-VL 1.8)</summary>
+
+The 0.19.0 image and installation stay unchanged; continue to use 0.19.0 for V100/SM70. The separate 0.33.0 x86_64 image uses CUDA 13 and requires a compatible NVIDIA driver. Do not install the two runtimes in the same environment. This profile enables vision RoPE optimizations for single-GPU A100 (SM80), unquantized BF16 PaddleOCR-VL 1.8 only; input resolution and output limits are not changed.
+
+From the repository root, build a PaddleX wheel and a separately tagged image:
+
+```bash
+python -m build --wheel --outdir dist-vllm033
+deploy/genai_vllm_server_docker/build.sh --vllm-version 0.33.0 --pdx-wheel dist-vllm033/paddlex-*.whl
+```
+
+```bash
+docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
+    -v "$PWD/deploy/genai_vllm_server_docker/paddleocr-vl-18-a100.yaml:/a100.yaml:ro" \
+    ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddlex-genai-vllm-server:vllm0.33.0 \
+    paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --backend vllm \
+    --host 0.0.0.0 --port 8080 --backend_config /a100.yaml
+```
+
+`api-server-count: 2` starts two HTTP frontend processes sharing one GPU inference engine. `paddlex-pvl-vision-rope: true` opts into the PaddleX vision RoPE implementation without replacing the stock vLLM model. Look for both `Started 2 API server processes` and `PaddleX PVL FP32 vision RoPE enabled` in the startup logs. Omit the flag to use stock RoPE. The fixed 8 GiB KV cache in the example is for same-GPU HPS deployment, not a total VRAM requirement.
+
+</details>
+
 #### 3.1.2 Starting Through PaddleX CLI
 
 VLM server dependencies may differ from those of the local pipeline client. Create a separate virtual environment for the VLM service. The following vLLM installation command uses CUDA 12.9 on NVIDIA and requires Python 3.10–3.13.

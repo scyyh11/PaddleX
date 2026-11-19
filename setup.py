@@ -238,6 +238,13 @@ EXTRAS = {
             "uvloop",
             "vllm == 0.19.0",
         ],
+        "genai-vllm-server-033": [
+            "einops",
+            "torch == 2.14.0",
+            "transformers == 5.20.2",
+            "uvloop",
+            "vllm == 0.33.0",
+        ],
         "paddle2onnx": [
             "paddle2onnx == 2.0.2rc3",
         ],
