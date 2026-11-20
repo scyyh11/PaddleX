@@ -58,17 +58,17 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
     require_genai_engine_plugin("vllm-server")
 
     config = dict(config)
-    enable_rope = config.pop("paddlex-pvl-vision-rope", False)
+    enable_rope = config.pop("paddlex-vision-rope", False)
     if not isinstance(enable_rope, bool):
-        raise ValueError("paddlex-pvl-vision-rope must be a YAML boolean.")
+        raise ValueError("paddlex-vision-rope must be a YAML boolean.")
     if enable_rope:
         if not is_vllm_performance_version() or model_name != _PERFORMANCE_MODEL:
             raise ValueError(
-                "paddlex-pvl-vision-rope requires PaddleOCR-VL 1.8 and vLLM 0.33.0."
+                "paddlex-vision-rope requires PaddleOCR-VL 1.8 and vLLM 0.33.0."
             )
         if "hf-overrides" in config or "hf_overrides" in config:
             raise ValueError(
-                "paddlex-pvl-vision-rope cannot be combined with hf-overrides."
+                "paddlex-vision-rope cannot be combined with hf-overrides."
             )
         config["hf-overrides"] = json.dumps({"architectures": [_PERFORMANCE_ARCH]})
 

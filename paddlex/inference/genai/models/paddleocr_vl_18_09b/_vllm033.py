@@ -15,9 +15,8 @@
 """Opt-in PaddleOCR-VL 1.8 vision implementation for vLLM 0.33.0.
 
 Keep the native image processor, projector, attention and decoder. Derived from
-vLLM's Apache-2.0 PaddleOCR-VL implementation (vLLM contributors) and the PVL
-FP32 RoPE experiment. The vision encoder override is version-pinned because
-its batch layout and FlashAttention metadata are vLLM implementation details.
+vLLM's Apache-2.0 PaddleOCR-VL implementation (vLLM contributors). The vision
+encoder override is version-pinned because its batch layout and FlashAttention metadata are vLLM implementation details.
 """
 
 from .....utils import logging
@@ -227,7 +226,7 @@ class PaddleXPaddleOCRVLForConditionalGeneration(PaddleOCRVLForConditionalGenera
             or encoder.attn_backend != AttentionBackendEnum.FLASH_ATTN
         ):
             raise ValueError(
-                "PaddleX PVL vision RoPE requires one SM80 GPU, BF16, "
+                "PaddleX vision RoPE requires one SM80 GPU, BF16, "
                 "unquantized weights and FlashAttention for vision."
             )
         # Bind only the two vision forwards on this model instance. Keep all
@@ -235,4 +234,4 @@ class PaddleXPaddleOCRVLForConditionalGeneration(PaddleOCRVLForConditionalGenera
         encoder.__class__ = _PaddleXSiglipEncoder
         for layer in encoder.layers:
             layer.self_attn.__class__ = _PaddleXSiglipAttention
-        logging.info("PaddleX PVL FP32 vision RoPE enabled (vLLM 0.33.0, SM80 BF16)")
+        logging.info("PaddleX FP32 vision RoPE enabled (vLLM 0.33.0, SM80 BF16)")

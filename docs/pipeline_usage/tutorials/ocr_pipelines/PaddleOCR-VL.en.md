@@ -786,7 +786,7 @@ docker run \
 <details>
 <summary>Optional: vLLM 0.33.0 performance profile on A100 (PaddleOCR-VL 1.8)</summary>
 
-The 0.19.0 image and installation stay unchanged; continue to use 0.19.0 for V100/SM70. The separate 0.33.0 x86_64 image uses CUDA 13 and requires a compatible NVIDIA driver. Do not install the two runtimes in the same environment. This profile enables vision RoPE optimizations for single-GPU A100 (SM80), unquantized BF16 PaddleOCR-VL 1.8 only; input resolution and output limits are not changed.
+The 0.19.0 image and installation stay unchanged; continue to use 0.19.0 for V100/SM70. The separate 0.33.0 x86_64 image uses CUDA 13 and requires a compatible NVIDIA driver. Do not install the two runtimes in the same environment. This profile enables the vision RoPE optimization only for unquantized BF16 PaddleOCR-VL 1.8 with vision FlashAttention on one SM80 GPU. Input resolution and output limits are unchanged. End-to-end validation was done on A100 only. On other GPUs, even where vLLM 0.33.0 is supported, leave this option off and use a native configuration supported by that GPU.
 
 From the repository root, build a PaddleX wheel and a separately tagged image:
 
@@ -803,7 +803,7 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
     --host 0.0.0.0 --port 8080 --backend_config /a100.yaml
 ```
 
-`api-server-count: 2` starts two HTTP frontend processes sharing one GPU inference engine. `paddlex-pvl-vision-rope: true` opts into the PaddleX vision RoPE implementation without replacing the stock vLLM model. Look for both `Started 2 API server processes` and `PaddleX PVL FP32 vision RoPE enabled` in the startup logs. Omit the flag to use stock RoPE. The fixed 8 GiB KV cache in the example is for same-GPU HPS deployment, not a total VRAM requirement.
+`api-server-count: 2` starts two HTTP frontend processes sharing one GPU inference engine. `paddlex-vision-rope: true` opts into the PaddleX vision RoPE implementation without replacing the stock vLLM model. Look for both `Started 2 API server processes` and `PaddleX FP32 vision RoPE enabled` in the startup logs. Omit the flag to use stock RoPE. The fixed 8 GiB KV cache in the example is for same-GPU HPS deployment, not a total VRAM requirement.
 
 </details>
 

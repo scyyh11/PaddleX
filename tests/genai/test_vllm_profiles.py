@@ -76,7 +76,7 @@ def backend(monkeypatch):
 
 def _launch(mod, config):
     mod.run_vllm_server(
-        "127.0.0.1", 8080, "PaddleOCR-VL-1.8-0.9B", "/models/pvl", config, None
+        "127.0.0.1", 8080, "PaddleOCR-VL-1.8-0.9B", "/models/paddleocr-vl", config, None
     )
 
 
@@ -85,7 +85,7 @@ def test_launches_native_multi_frontend_serve(backend, monkeypatch):
     execute = Mock()
     monkeypatch.setattr(mod.os, "execv", execute)
     cfg = {
-        "paddlex-pvl-vision-rope": True,
+        "paddlex-vision-rope": True,
         "api-server-count": 2,
         "enable-prefix-caching": False,
     }
@@ -96,10 +96,10 @@ def test_launches_native_multi_frontend_serve(backend, monkeypatch):
     assert argv[argv.index("--api-server-count") + 1] == "2"
     assert "--no-enable-prefix-caching" in argv
     assert "--enable-prefix-caching" not in argv
-    assert "--paddlex-pvl-vision-rope" not in argv
+    assert "--paddlex-vision-rope" not in argv
     args = json.loads(argv[argv.index("--hf-overrides") + 1])
     assert args == {"architectures": [mod._PERFORMANCE_ARCH]}
-    assert cfg["paddlex-pvl-vision-rope"] is True
+    assert cfg["paddlex-vision-rope"] is True
 
 
 def test_stock_033_does_not_select_paddlex_arch(backend, monkeypatch):
@@ -113,13 +113,13 @@ def test_stock_033_does_not_select_paddlex_arch(backend, monkeypatch):
 @pytest.mark.parametrize(
     "cfg",
     [
-        {"paddlex-pvl-vision-rope": "false"},
-        {"paddlex-pvl-vision-rope": True, "hf-overrides": "{}"},
+        {"paddlex-vision-rope": "false"},
+        {"paddlex-vision-rope": True, "hf-overrides": "{}"},
     ],
 )
 def test_rejects_ambiguous_rope_options(backend, cfg):
     mod, _ = backend
-    with pytest.raises(ValueError, match="paddlex-pvl-vision-rope"):
+    with pytest.raises(ValueError, match="paddlex-vision-rope"):
         _launch(mod, cfg)
 
 
@@ -144,7 +144,7 @@ def test_019_dispatch_stays_on_original_path(backend, monkeypatch):
     api.make_arg_parser.return_value.parse_args.assert_called_once()
     uvloop.run.assert_called_once_with(api.run_server.return_value)
     with pytest.raises(ValueError, match="vLLM 0.33.0"):
-        _launch(mod, {"paddlex-pvl-vision-rope": True})
+        _launch(mod, {"paddlex-vision-rope": True})
 
 
 def test_registration_is_lazy_and_only_for_033(backend, monkeypatch):
