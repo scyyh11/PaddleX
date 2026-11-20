@@ -81,100 +81,91 @@ def _launch(mod, config):
     )
 
 
-def test_launches_native_multi_frontend_serve(backend, monkeypatch):
+def test_a100_profile_enables_both_optimizations(backend, monkeypatch):
+    import yaml
+
     mod, _ = backend
     execute = Mock()
     monkeypatch.setattr(mod.os, "execv", execute)
-    cfg = {
-        "paddlex-vision-rope": True,
-        "api-server-count": 2,
-        "enable-prefix-caching": False,
-    }
+    cfg = yaml.safe_load(
+        (ROOT / "deploy/genai_vllm_server_docker/paddleocr-vl-18-a100.yaml").read_text()
+    )
     _launch(mod, cfg)
     executable, argv = execute.call_args.args
     assert executable == sys.executable
     assert argv[:4] == [sys.executable, "-m", "vllm.entrypoints.cli.main", "serve"]
     assert argv[argv.index("--api-server-count") + 1] == "2"
+    assert argv[argv.index("--kv-cache-memory-bytes") + 1] == "8589934592"
     assert "--no-enable-prefix-caching" in argv
-    assert "--enable-prefix-caching" not in argv
-    assert "--paddlex-vision-rope" not in argv
-    args = json.loads(argv[argv.index("--hf-overrides") + 1])
-    assert args == {
-        "architectures": [mod._VISION_ARCH],
-        "paddlex_vision_batching": False,
-        "paddlex_vision_rope": True,
-    }
-    assert cfg["paddlex-vision-rope"] is True
-
-
-def test_stock_033_does_not_select_paddlex_arch(backend, monkeypatch):
-    mod, _ = backend
-    execute = Mock()
-    monkeypatch.setattr(mod.os, "execv", execute)
-    _launch(mod, {})
-    assert "--hf-overrides" not in execute.call_args.args[1]
-
-
-@pytest.mark.parametrize(
-    "cfg",
-    [
-        {"paddlex-vision-rope": "false"},
-        {"paddlex-vision-rope": True, "hf-overrides": "{}"},
-    ],
-)
-def test_rejects_ambiguous_rope_options(backend, cfg):
-    mod, _ = backend
-    with pytest.raises(ValueError, match="paddlex-vision-rope|hf-overrides"):
-        _launch(mod, cfg)
-
-
-def test_019_native_cli_and_optional_vision_batching(backend, monkeypatch):
-    mod, version = backend
-    version.return_value = "0.19.0"
-    execute = Mock()
-    monkeypatch.setattr(mod.os, "execv", execute)
-    _launch(mod, {"api-server-count": 1})
-    assert "--hf-overrides" not in execute.call_args.args[1]
-    _launch(mod, {"paddlex-vision-batching": True, "api-server-count": 2})
-    argv = execute.call_args.args[1]
-    assert argv[3] == "serve"
-    assert argv[argv.index("--api-server-count") + 1] == "2"
+    assert not any(arg.startswith("--paddlex-vision-") for arg in argv)
     assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
         "architectures": [mod._VISION_ARCH],
         "paddlex_vision_batching": True,
-        "paddlex_vision_rope": False,
+        "paddlex_vision_rope": True,
     }
-    with pytest.raises(ValueError, match="vLLM 0.33.0"):
-        _launch(mod, {"paddlex-vision-rope": True})
-    with pytest.raises(ValueError, match="prefill-schedule-interval"):
-        _launch(mod, {"prefill_schedule_interval": 8})
+    assert cfg["paddlex-vision-performance"] is True
 
 
-@pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0", "0.33.0"])
-def test_batching_uses_the_same_plugin(backend, monkeypatch, version_name):
+@pytest.mark.parametrize("version_name", ["0.19.0", "0.33.0"])
+@pytest.mark.parametrize("cfg", [{}, {"paddlex_vision_performance": False}])
+def test_native_path_when_profile_is_off(backend, monkeypatch, version_name, cfg):
     mod, version = backend
     version.return_value = version_name
     execute = Mock()
     monkeypatch.setattr(mod.os, "execv", execute)
-    _launch(mod, {"paddlex_vision_batching": True, "paddlex-vision-rope": False})
+    _launch(mod, {**cfg, "api-server-count": 1, "enable-prefix-caching": False})
     argv = execute.call_args.args[1]
     assert argv[3] == "serve"
-    assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
-        "architectures": [mod._VISION_ARCH],
-        "paddlex_vision_batching": True,
-        "paddlex_vision_rope": False,
-    }
-    if version_name == "0.33.0":
-        _launch(mod, {"paddlex-vision-batching": True, "paddlex-vision-rope": True})
-        argv = execute.call_args.args[1]
-        assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
-            "architectures": [mod._VISION_ARCH],
-            "paddlex_vision_batching": True,
-            "paddlex_vision_rope": True,
-        }
-    else:
-        with pytest.raises(ValueError, match="vLLM 0.33.0"):
-            _launch(mod, {"paddlex-vision-rope": True})
+    assert argv[argv.index("--api-server-count") + 1] == "1"
+    assert "--no-enable-prefix-caching" in argv
+    assert "--hf-overrides" not in argv
+    assert "--paddlex-vision-performance" not in argv
+
+
+@pytest.mark.parametrize(
+    "cfg, message",
+    [
+        ({"paddlex-vision-performance": "false"}, "YAML boolean"),
+        ({"paddlex-vision-performance": True, "hf-overrides": "{}"}, "hf-overrides"),
+        ({"paddlex_vision_batching": True}, "have been removed"),
+        ({"paddlex-vision-rope": False}, "have been removed"),
+    ],
+)
+def test_rejects_invalid_or_removed_public_options(backend, cfg, message):
+    mod, _ = backend
+    with pytest.raises(ValueError, match=message):
+        _launch(mod, cfg)
+
+
+@pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0"])
+def test_profile_requires_033(backend, version_name):
+    mod, version = backend
+    version.return_value = version_name
+    with pytest.raises(ValueError, match="requires PaddleOCR-VL 1.8 and vLLM 0.33.0"):
+        _launch(mod, {"paddlex-vision-performance": True})
+    if version_name == "0.19.0":
+        with pytest.raises(ValueError, match="prefill-schedule-interval"):
+            _launch(mod, {"prefill_schedule_interval": 8})
+
+
+def test_profile_rejects_other_models(backend):
+    mod, _ = backend
+    with pytest.raises(ValueError, match="requires PaddleOCR-VL 1.8"):
+        mod.run_vllm_server(
+            "127.0.0.1",
+            8080,
+            "PaddleOCR-VL-0.9B",
+            "/models/paddleocr-vl",
+            {"paddlex-vision-performance": True},
+            None,
+        )
+
+
+def test_profile_requires_cuda(backend, monkeypatch):
+    mod, _ = backend
+    monkeypatch.setattr(sys.modules["torch"].version, "cuda", None)
+    with pytest.raises(ValueError, match="requires NVIDIA CUDA"):
+        _launch(mod, {"paddlex-vision-performance": True})
 
 
 @pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0", "0.33.0"])
@@ -271,6 +262,28 @@ def test_batching_mounts_encoder_without_importing_rope(vision, monkeypatch):
     cfg.model_config.hf_config.paddlex_vision_rope = True
     with pytest.raises(ValueError, match="vLLM 0.33.0"):
         mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
+
+
+def test_unsupported_profile_fail_fast_without_mounting_batching(vision, monkeypatch):
+    mod, _ = vision
+    encoder = mod.SiglipEncoder()
+    cfg = SimpleNamespace(
+        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
+        model_config=SimpleNamespace(
+            hf_config=SimpleNamespace(
+                paddlex_vision_batching=True,
+                paddlex_vision_rope=True,
+            )
+        ),
+    )
+    monkeypatch.setattr(mod, "_vision_support", lambda *a: "requires one SM80 GPU")
+    with pytest.raises(
+        ValueError,
+        match="vision performance profile unavailable: requires one SM80 GPU",
+    ):
+        mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
+    assert type(encoder) is mod.SiglipEncoder
+    mod.logging.warning.assert_not_called()
 
 
 def test_release_extras_are_separately_pinned(monkeypatch):

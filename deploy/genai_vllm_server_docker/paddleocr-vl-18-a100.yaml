@@ -1,6 +1,5 @@
 # Validated target: single NVIDIA A100 (SM80), vLLM 0.33.0, PaddleOCR-VL 1.8.
-paddlex-vision-batching: true
-paddlex-vision-rope: true
+paddlex-vision-performance: true
 dtype: bfloat16
 trust-remote-code: true
 trust-request-mm-kwargs: true

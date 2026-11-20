@@ -222,6 +222,7 @@ class PaddleXPaddleOCRVLForConditionalGeneration(PaddleOCRVLForConditionalGenera
     def __init__(self, *, vllm_config, prefix=""):
         super().__init__(vllm_config=vllm_config, prefix=prefix)
         hf_config = vllm_config.model_config.hf_config
+        # The serving profile always sets both. Internal tests may enable one.
         batching = getattr(hf_config, "paddlex_vision_batching", False)
         rope = getattr(hf_config, "paddlex_vision_rope", False)
         self._paddlex_vision_batching = False
@@ -233,7 +234,8 @@ class PaddleXPaddleOCRVLForConditionalGeneration(PaddleOCRVLForConditionalGenera
         reason = _vision_support(vllm_config, self.visual, encoder)
         if reason:
             if rope:
-                raise ValueError(f"PaddleX vision RoPE unavailable: {reason}.")
+                feature = "vision performance profile" if batching else "vision RoPE"
+                raise ValueError(f"PaddleX {feature} unavailable: {reason}.")
             logging.warning(
                 f"PaddleX vision batching unavailable ({reason}); using native vLLM vision."
             )

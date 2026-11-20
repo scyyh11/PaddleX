@@ -32,6 +32,7 @@ from ..models import ALL_MODEL_INFO, get_model_components, is_integrated_model_a
 
 _VISION_MODEL = "PaddleOCR-VL-1.8-0.9B"
 _VISION_ARCH = "PaddleXPaddleOCRVLForConditionalGeneration"
+_VISION_PERFORMANCE_OPTION = "paddlex-vision-performance"
 _MODEL_MODULE = "paddlex.inference.genai.models.paddleocr_vl_18_09b._vllm_vision"
 
 
@@ -56,26 +57,31 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
 
     config = {k.replace("_", "-"): v for k, v in config.items()}
     legacy, modern = is_vllm_legacy_version(), is_vllm_performance_version()
-    batching = config.pop("paddlex-vision-batching", False)
-    rope = config.pop("paddlex-vision-rope", False)
-    if not isinstance(batching, bool) or not isinstance(rope, bool):
+    if {"paddlex-vision-batching", "paddlex-vision-rope"} & config.keys():
         raise ValueError(
-            "paddlex-vision-batching and paddlex-vision-rope must be YAML booleans."
+            "The separate paddlex-vision-batching and paddlex-vision-rope options "
+            f"have been removed. Use {_VISION_PERFORMANCE_OPTION}: true to enable "
+            "both optimizations, or omit these options to use native vLLM vision."
         )
-    if batching or rope:
-        if model_name != _VISION_MODEL:
-            raise ValueError("PaddleX vision options require PaddleOCR-VL 1.8.")
-        if rope and not modern:
-            raise ValueError("paddlex-vision-rope requires vLLM 0.33.0.")
+    vision_performance = config.pop(_VISION_PERFORMANCE_OPTION, False)
+    if not isinstance(vision_performance, bool):
+        raise ValueError(f"{_VISION_PERFORMANCE_OPTION} must be a YAML boolean.")
+    if vision_performance:
+        if model_name != _VISION_MODEL or not modern:
+            raise ValueError(
+                f"{_VISION_PERFORMANCE_OPTION} requires PaddleOCR-VL 1.8 and vLLM 0.33.0."
+            )
         if "hf-overrides" in config:
             raise ValueError(
-                "PaddleX vision options cannot be combined with hf-overrides."
+                f"{_VISION_PERFORMANCE_OPTION} cannot be combined with hf-overrides."
             )
+        # Keep the two parts independently testable at model construction time,
+        # without exposing their internal switches in the serving configuration.
         config["hf-overrides"] = json.dumps(
             {
                 "architectures": [_VISION_ARCH],
-                "paddlex_vision_batching": batching,
-                "paddlex_vision_rope": rope,
+                "paddlex_vision_batching": True,
+                "paddlex_vision_rope": True,
             }
         )
     if legacy and "prefill-schedule-interval" in config:
@@ -97,6 +103,9 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
 
     import torch
 
+    if vision_performance and torch.version.cuda is None:
+        raise ValueError(f"{_VISION_PERFORMANCE_OPTION} requires NVIDIA CUDA.")
+
     if torch.version.hip is not None and torch.version.cuda is None:
         # For DCU
         if "api-server-count" in config:
@@ -105,7 +114,7 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
             )
             config.pop("api-server-count")
 
-    if (legacy or modern or batching) and torch.version.cuda is not None:
+    if (legacy or modern) and torch.version.cuda is not None:
         # Use the real serve command; run_server() alone starts one frontend.
         # Preserve explicitly disabled BooleanOptionalAction options in this path.
         disabled = [
