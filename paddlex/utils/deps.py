@@ -29,7 +29,6 @@ _EXTRA_PATTERN = re.compile(
 )
 _COLLECTIVE_EXTRA_NAMES = {"base", "plugins", "all"}
 
-VLLM_PERFORMANCE_VERSION = Version("0.33.0")
 _VLLM_PERFORMANCE_EXTRA = "genai-vllm-server-033"
 _SUPPORTED_GENAI_ENGINE_BACKENDS = ["fastdeploy-server", "vllm-server", "sglang-server"]
 
@@ -267,11 +266,17 @@ def get_paddle2onnx_dep_specs():
     return dep_specs
 
 
-def is_vllm_performance_version():
+def _is_vllm_version(expected):
     version = get_dep_version("vllm")
-    return version is not None and Version(version).public == str(
-        VLLM_PERFORMANCE_VERSION
-    )
+    return version is not None and Version(version).public == expected
+
+
+def is_vllm_legacy_version():
+    return _is_vllm_version("0.19.0")
+
+
+def is_vllm_performance_version():
+    return _is_vllm_version("0.33.0")
 
 
 def is_genai_engine_plugin_available(backend="any"):

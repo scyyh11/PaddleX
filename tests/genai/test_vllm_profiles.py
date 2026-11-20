@@ -53,6 +53,7 @@ def backend(monkeypatch):
     version = Mock(return_value="0.33.0")
     genai = "paddlex.inference.genai"
     deps = ModuleType("paddlex.utils.deps")
+    deps.is_vllm_legacy_version = lambda: version() == "0.19.0"
     deps.is_vllm_performance_version = lambda: version() == "0.33.0"
     deps.is_genai_engine_plugin_available = Mock(return_value=True)
     deps.require_genai_engine_plugin = Mock()
@@ -119,32 +120,41 @@ def test_stock_033_does_not_select_paddlex_arch(backend, monkeypatch):
 )
 def test_rejects_ambiguous_rope_options(backend, cfg):
     mod, _ = backend
-    with pytest.raises(ValueError, match="paddlex-vision-rope"):
+    with pytest.raises(ValueError, match="paddlex-vision-rope|hf-overrides"):
         _launch(mod, cfg)
 
 
-def test_019_dispatch_stays_on_original_path(backend, monkeypatch):
+def test_019_native_cli_and_optional_vision_batching(backend, monkeypatch):
     mod, version = backend
     version.return_value = "0.19.0"
-    api = SimpleNamespace(
-        FlexibleArgumentParser=Mock(),
-        cli_env_setup=Mock(),
-        make_arg_parser=Mock(),
-        run_server=Mock(),
-        validate_parsed_serve_args=Mock(),
-    )
-    monkeypatch.setitem(sys.modules, "vllm.entrypoints.openai.api_server", api)
-    uvloop = SimpleNamespace(run=Mock())
-    monkeypatch.setitem(sys.modules, "uvloop", uvloop)
-    monkeypatch.setattr(
-        mod.os, "execv", Mock(side_effect=AssertionError("legacy exec"))
-    )
-    _launch(mod, {"api-server-count": 4})
-    api.cli_env_setup.assert_called_once_with()
-    api.make_arg_parser.return_value.parse_args.assert_called_once()
-    uvloop.run.assert_called_once_with(api.run_server.return_value)
+    execute = Mock()
+    monkeypatch.setattr(mod.os, "execv", execute)
+    _launch(mod, {"api-server-count": 1})
+    assert "--hf-overrides" not in execute.call_args.args[1]
+    _launch(mod, {"paddlex-vision-batching": True, "api-server-count": 2})
+    argv = execute.call_args.args[1]
+    assert argv[3] == "serve"
+    assert argv[argv.index("--api-server-count") + 1] == "2"
+    assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
+        "architectures": [mod._LEGACY_BATCHED_ARCH]
+    }
     with pytest.raises(ValueError, match="vLLM 0.33.0"):
         _launch(mod, {"paddlex-vision-rope": True})
+    with pytest.raises(ValueError, match="prefill-schedule-interval"):
+        _launch(mod, {"prefill_schedule_interval": 8})
+
+
+def test_033_already_has_native_batching(backend, monkeypatch):
+    mod, _ = backend
+    execute = Mock()
+    monkeypatch.setattr(mod.os, "execv", execute)
+    _launch(mod, {"paddlex-vision-batching": True})
+    assert "--hf-overrides" not in execute.call_args.args[1]
+    _launch(mod, {"paddlex-vision-batching": True, "paddlex-vision-rope": True})
+    argv = execute.call_args.args[1]
+    assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
+        "architectures": [mod._PERFORMANCE_ARCH]
+    }
 
 
 def test_registration_is_lazy_and_only_for_033(backend, monkeypatch):
@@ -157,6 +167,11 @@ def test_registration_is_lazy_and_only_for_033(backend, monkeypatch):
     assert loader.endswith("_vllm033:" + arch)
     registry.register_model.reset_mock()
     version.return_value = "0.19.0"
+    mod.register_models()
+    assert registry.register_model.call_args.args[0] == mod._LEGACY_BATCHED_ARCH
+    assert "_vllm019:" in registry.register_model.call_args.args[1]
+    registry.register_model.reset_mock()
+    version.return_value = "0.28.0"
     mod.register_models()
     registry.register_model.assert_not_called()
 

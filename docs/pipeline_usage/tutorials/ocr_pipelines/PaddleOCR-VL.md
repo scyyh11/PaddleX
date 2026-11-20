@@ -787,6 +787,10 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
 
 `api-server-count: 2` 启动两个 HTTP 进程，仍只加载一个 GPU 推理引擎。`paddlex-vision-rope: true` 明确选中 PaddleX 的视觉 RoPE 实现，不覆盖 vLLM 的默认模型。启动日志应同时出现 `Started 2 API server processes` 和 `PaddleX FP32 vision RoPE enabled`。删除此开关可使用原生 RoPE。示例的固定 8 GiB KV 缓存用于同卡 HPS 部署，不代表总显存需求。
 
+
+**版本自适应。** 两个版本仍在不同 Python 环境或镜像中安装，但共用同一 `paddlex_genai_server` 入口。在支持的 NVIDIA 配置上，`api-server-count` 对两个版本都有效；0.19.0 未覆盖配置时仍用一个 HTTP 前端。PaddleX 流水线对远程 VLM 共用逐块提交和并发调度，不依赖服务器版本。
+
+可选配置 `paddlex-vision-batching: true` 只对 PaddleOCR-VL 1.8 生效：0.19.0 启用视觉合批适配（限制为单张 SM80、BF16、未量化、视觉 FlashAttention），0.33.0 使用原生合批，不加载旧版适配。V100/SM70 保持 0.19.0 原生 FP16 路径，不启用该开关。`paddlex-vision-rope` 和 `prefill-schedule-interval` 不用于 0.19.0。
 </details>
 
 #### 3.1.2 通过 PaddleX CLI 启动

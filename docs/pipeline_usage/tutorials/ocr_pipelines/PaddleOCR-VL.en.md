@@ -805,6 +805,10 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
 
 `api-server-count: 2` starts two HTTP frontend processes sharing one GPU inference engine. `paddlex-vision-rope: true` opts into the PaddleX vision RoPE implementation without replacing the stock vLLM model. Look for both `Started 2 API server processes` and `PaddleX FP32 vision RoPE enabled` in the startup logs. Omit the flag to use stock RoPE. The fixed 8 GiB KV cache in the example is for same-GPU HPS deployment, not a total VRAM requirement.
 
+
+**Version-aware behavior.** Install the two vLLM versions in separate environments or images, but use the same `paddlex_genai_server` command. `api-server-count` is honored on the supported NVIDIA path for both versions; vLLM 0.19.0 still defaults to one HTTP frontend. The PaddleX pipeline shares incremental request submission and concurrency across remote VLM backends, independently of the server version.
+
+The optional `paddlex-vision-batching: true` setting is for PaddleOCR-VL 1.8. With 0.19.0 it enables the vision batching adapter on one SM80 GPU with BF16, unquantized weights and vision FlashAttention. With 0.33.0 it uses native batching without loading the backport. On V100/SM70, use the stock 0.19.0 FP16 path and leave this option off. Do not use `paddlex-vision-rope` or `prefill-schedule-interval` with 0.19.0.
 </details>
 
 #### 3.1.2 Starting Through PaddleX CLI

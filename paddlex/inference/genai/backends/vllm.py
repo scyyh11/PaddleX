@@ -19,6 +19,7 @@ import sys
 from ....utils import logging
 from ....utils.deps import (
     is_genai_engine_plugin_available,
+    is_vllm_legacy_version,
     is_vllm_performance_version,
     require_genai_engine_plugin,
 )
@@ -31,6 +32,8 @@ from ..models import ALL_MODEL_INFO, get_model_components, is_integrated_model_a
 
 _PERFORMANCE_MODEL = "PaddleOCR-VL-1.8-0.9B"
 _PERFORMANCE_ARCH = "PaddleXPaddleOCRVLForConditionalGeneration"
+_LEGACY_BATCHED_ARCH = "PaddleXBatchedPaddleOCRVLForConditionalGeneration"
+_MODEL_MODULE = "paddlex.inference.genai.models.paddleocr_vl_18_09b"
 
 
 def register_models():
@@ -42,8 +45,11 @@ def register_models():
             # selects the optimized implementation, in the API and engine workers.
             ModelRegistry.register_model(
                 _PERFORMANCE_ARCH,
-                "paddlex.inference.genai.models.paddleocr_vl_18_09b._vllm033:"
-                + _PERFORMANCE_ARCH,
+                f"{_MODEL_MODULE}._vllm033:{_PERFORMANCE_ARCH}",
+            )
+        elif is_vllm_legacy_version():
+            ModelRegistry.register_model(
+                _LEGACY_BATCHED_ARCH, f"{_MODEL_MODULE}._vllm019:{_LEGACY_BATCHED_ARCH}"
             )
         for model_name in ALL_MODEL_INFO:
             if (
@@ -57,20 +63,36 @@ def register_models():
 def run_vllm_server(host, port, model_name, model_dir, config, chat_template_path):
     require_genai_engine_plugin("vllm-server")
 
-    config = dict(config)
-    enable_rope = config.pop("paddlex-vision-rope", False)
-    if not isinstance(enable_rope, bool):
-        raise ValueError("paddlex-vision-rope must be a YAML boolean.")
-    if enable_rope:
-        if not is_vllm_performance_version() or model_name != _PERFORMANCE_MODEL:
+    config = {k.replace("_", "-"): v for k, v in config.items()}
+    legacy, modern = is_vllm_legacy_version(), is_vllm_performance_version()
+    arch = None
+    for option, supported, target, required in (
+        ("paddlex-vision-rope", modern, _PERFORMANCE_ARCH, "0.33.0"),
+        (
+            "paddlex-vision-batching",
+            legacy or modern,
+            _LEGACY_BATCHED_ARCH if legacy else None,
+            "0.19.0 or 0.33.0",
+        ),
+    ):
+        enabled = config.pop(option, False)
+        if not isinstance(enabled, bool):
+            raise ValueError(f"{option} must be a YAML boolean.")
+        if enabled:
+            if not supported or model_name != _PERFORMANCE_MODEL:
+                raise ValueError(
+                    f"{option} requires PaddleOCR-VL 1.8 and vLLM {required}."
+                )
+            # 0.33.0 already batches images; never register the backport there.
+            arch = target or arch
+    if arch is not None:
+        if "hf-overrides" in config:
             raise ValueError(
-                "paddlex-vision-rope requires PaddleOCR-VL 1.8 and vLLM 0.33.0."
+                "PaddleX vision options cannot be combined with hf-overrides."
             )
-        if "hf-overrides" in config or "hf_overrides" in config:
-            raise ValueError(
-                "paddlex-vision-rope cannot be combined with hf-overrides."
-            )
-        config["hf-overrides"] = json.dumps({"architectures": [_PERFORMANCE_ARCH]})
+        config["hf-overrides"] = json.dumps({"architectures": [arch]})
+    if legacy and "prefill-schedule-interval" in config:
+        raise ValueError("prefill-schedule-interval requires vLLM 0.33.0.")
 
     set_config_defaults(config, {"served-model-name": model_name})
 
@@ -96,7 +118,7 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
             )
             config.pop("api-server-count")
 
-    if is_vllm_performance_version():
+    if (legacy or modern) and torch.version.cuda is not None:
         # Use the real serve command; run_server() alone starts one frontend.
         # Preserve explicitly disabled BooleanOptionalAction options in this path.
         disabled = [
