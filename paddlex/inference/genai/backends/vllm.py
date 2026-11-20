@@ -30,27 +30,18 @@ from ..configs.utils import (
 )
 from ..models import ALL_MODEL_INFO, get_model_components, is_integrated_model_available
 
-_PERFORMANCE_MODEL = "PaddleOCR-VL-1.8-0.9B"
-_PERFORMANCE_ARCH = "PaddleXPaddleOCRVLForConditionalGeneration"
-_LEGACY_BATCHED_ARCH = "PaddleXBatchedPaddleOCRVLForConditionalGeneration"
-_MODEL_MODULE = "paddlex.inference.genai.models.paddleocr_vl_18_09b"
+_VISION_MODEL = "PaddleOCR-VL-1.8-0.9B"
+_VISION_ARCH = "PaddleXPaddleOCRVLForConditionalGeneration"
+_MODEL_MODULE = "paddlex.inference.genai.models.paddleocr_vl_18_09b._vllm_vision"
 
 
 def register_models():
     from vllm import ModelRegistry
 
     if is_genai_engine_plugin_available("vllm-server"):
-        if is_vllm_performance_version():
-            # The stock architecture stays registered. Only explicit opt-in
-            # selects the optimized implementation, in the API and engine workers.
-            ModelRegistry.register_model(
-                _PERFORMANCE_ARCH,
-                f"{_MODEL_MODULE}._vllm033:{_PERFORMANCE_ARCH}",
-            )
-        elif is_vllm_legacy_version():
-            ModelRegistry.register_model(
-                _LEGACY_BATCHED_ARCH, f"{_MODEL_MODULE}._vllm019:{_LEGACY_BATCHED_ARCH}"
-            )
+        # Registration is lazy. The stock architecture remains untouched;
+        # the shared vision implementation is selected only on opt-in.
+        ModelRegistry.register_model(_VISION_ARCH, f"{_MODEL_MODULE}:{_VISION_ARCH}")
         for model_name in ALL_MODEL_INFO:
             if (
                 not is_integrated_model_available(model_name, "vllm")
@@ -65,32 +56,28 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
 
     config = {k.replace("_", "-"): v for k, v in config.items()}
     legacy, modern = is_vllm_legacy_version(), is_vllm_performance_version()
-    arch = None
-    for option, supported, target, required in (
-        ("paddlex-vision-rope", modern, _PERFORMANCE_ARCH, "0.33.0"),
-        (
-            "paddlex-vision-batching",
-            legacy or modern,
-            _LEGACY_BATCHED_ARCH if legacy else None,
-            "0.19.0 or 0.33.0",
-        ),
-    ):
-        enabled = config.pop(option, False)
-        if not isinstance(enabled, bool):
-            raise ValueError(f"{option} must be a YAML boolean.")
-        if enabled:
-            if not supported or model_name != _PERFORMANCE_MODEL:
-                raise ValueError(
-                    f"{option} requires PaddleOCR-VL 1.8 and vLLM {required}."
-                )
-            # 0.33.0 already batches images; never register the backport there.
-            arch = target or arch
-    if arch is not None:
+    batching = config.pop("paddlex-vision-batching", False)
+    rope = config.pop("paddlex-vision-rope", False)
+    if not isinstance(batching, bool) or not isinstance(rope, bool):
+        raise ValueError(
+            "paddlex-vision-batching and paddlex-vision-rope must be YAML booleans."
+        )
+    if batching or rope:
+        if model_name != _VISION_MODEL:
+            raise ValueError("PaddleX vision options require PaddleOCR-VL 1.8.")
+        if rope and not modern:
+            raise ValueError("paddlex-vision-rope requires vLLM 0.33.0.")
         if "hf-overrides" in config:
             raise ValueError(
                 "PaddleX vision options cannot be combined with hf-overrides."
             )
-        config["hf-overrides"] = json.dumps({"architectures": [arch]})
+        config["hf-overrides"] = json.dumps(
+            {
+                "architectures": [_VISION_ARCH],
+                "paddlex_vision_batching": batching,
+                "paddlex_vision_rope": rope,
+            }
+        )
     if legacy and "prefill-schedule-interval" in config:
         raise ValueError("prefill-schedule-interval requires vLLM 0.33.0.")
 
@@ -118,7 +105,7 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
             )
             config.pop("api-server-count")
 
-    if (legacy or modern) and torch.version.cuda is not None:
+    if (legacy or modern or batching) and torch.version.cuda is not None:
         # Use the real serve command; run_server() alone starts one frontend.
         # Preserve explicitly disabled BooleanOptionalAction options in this path.
         disabled = [

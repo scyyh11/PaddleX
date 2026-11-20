@@ -808,7 +808,7 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
 
 **Version-aware behavior.** Install the two vLLM versions in separate environments or images, but use the same `paddlex_genai_server` command. `api-server-count` is honored on the supported NVIDIA path for both versions; vLLM 0.19.0 still defaults to one HTTP frontend. The PaddleX pipeline shares incremental request submission and concurrency across remote VLM backends, independently of the server version.
 
-The optional `paddlex-vision-batching: true` setting is for PaddleOCR-VL 1.8. With 0.19.0 it enables the vision batching adapter on one SM80 GPU with BF16, unquantized weights and vision FlashAttention. With 0.33.0 it uses native batching without loading the backport. On V100/SM70, use the stock 0.19.0 FP16 path and leave this option off. Do not use `paddlex-vision-rope` or `prefill-schedule-interval` with 0.19.0.
+`paddlex-vision-batching: true` opts into one shared PaddleX batching implementation for PaddleOCR-VL 1.8. It owns image packing, attention segments and output splitting without adding a second batching pass or branching on whether vLLM batches natively. It requires one SM80 GPU, BF16, unquantized weights, vision FlashAttention and a compatible vLLM vision interface. If these checks fail, PaddleX logs the reason and uses the native path. Omit this option to keep vLLM's batching behavior. The tested deployment profiles remain 0.19.0 and 0.33.0; intermediate versions are not guaranteed. On V100/SM70, use native 0.19.0 FP16 with both vision options off. Fused RoPE is validated independently; neither `paddlex-vision-rope` nor `prefill-schedule-interval` is supported on 0.19.0.
 </details>
 
 #### 3.1.2 Starting Through PaddleX CLI

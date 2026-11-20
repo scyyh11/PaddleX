@@ -790,7 +790,7 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
 
 **版本自适应。** 两个版本仍在不同 Python 环境或镜像中安装，但共用同一 `paddlex_genai_server` 入口。在支持的 NVIDIA 配置上，`api-server-count` 对两个版本都有效；0.19.0 未覆盖配置时仍用一个 HTTP 前端。PaddleX 流水线对远程 VLM 共用逐块提交和并发调度，不依赖服务器版本。
 
-可选配置 `paddlex-vision-batching: true` 只对 PaddleOCR-VL 1.8 生效：0.19.0 启用视觉合批适配（限制为单张 SM80、BF16、未量化、视觉 FlashAttention），0.33.0 使用原生合批，不加载旧版适配。V100/SM70 保持 0.19.0 原生 FP16 路径，不启用该开关。`paddlex-vision-rope` 和 `prefill-schedule-interval` 不用于 0.19.0。
+`paddlex-vision-batching: true` 为 PaddleOCR-VL 1.8 启用同一个 PaddleX 视觉合批实现，无需判断 vLLM 是否已原生合批。它接管该模型的多图打包、分段和输出拆分，不会叠加两次合批。当前要求单张 SM80 GPU、BF16、未量化、视觉 FlashAttention，且 vLLM 视觉接口兼容；条件不满足时记录原因并回退原生路径。删除该开关可保留 vLLM 自身的合批行为。已验证的部署档仍为 0.19.0 和 0.33.0，不承诺中间版本的镜像或兼容性。V100/SM70 继续走 0.19.0 原生 FP16，两项视觉优化都不启用。融合 RoPE 独立验证，`paddlex-vision-rope` 和 `prefill-schedule-interval` 不用于 0.19.0。
 </details>
 
 #### 3.1.2 通过 PaddleX CLI 启动

@@ -99,7 +99,11 @@ def test_launches_native_multi_frontend_serve(backend, monkeypatch):
     assert "--enable-prefix-caching" not in argv
     assert "--paddlex-vision-rope" not in argv
     args = json.loads(argv[argv.index("--hf-overrides") + 1])
-    assert args == {"architectures": [mod._PERFORMANCE_ARCH]}
+    assert args == {
+        "architectures": [mod._VISION_ARCH],
+        "paddlex_vision_batching": False,
+        "paddlex_vision_rope": True,
+    }
     assert cfg["paddlex-vision-rope"] is True
 
 
@@ -136,7 +140,9 @@ def test_019_native_cli_and_optional_vision_batching(backend, monkeypatch):
     assert argv[3] == "serve"
     assert argv[argv.index("--api-server-count") + 1] == "2"
     assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
-        "architectures": [mod._LEGACY_BATCHED_ARCH]
+        "architectures": [mod._VISION_ARCH],
+        "paddlex_vision_batching": True,
+        "paddlex_vision_rope": False,
     }
     with pytest.raises(ValueError, match="vLLM 0.33.0"):
         _launch(mod, {"paddlex-vision-rope": True})
@@ -144,36 +150,127 @@ def test_019_native_cli_and_optional_vision_batching(backend, monkeypatch):
         _launch(mod, {"prefill_schedule_interval": 8})
 
 
-def test_033_already_has_native_batching(backend, monkeypatch):
-    mod, _ = backend
+@pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0", "0.33.0"])
+def test_batching_uses_the_same_plugin(backend, monkeypatch, version_name):
+    mod, version = backend
+    version.return_value = version_name
     execute = Mock()
     monkeypatch.setattr(mod.os, "execv", execute)
-    _launch(mod, {"paddlex-vision-batching": True})
-    assert "--hf-overrides" not in execute.call_args.args[1]
-    _launch(mod, {"paddlex-vision-batching": True, "paddlex-vision-rope": True})
+    _launch(mod, {"paddlex_vision_batching": True, "paddlex-vision-rope": False})
     argv = execute.call_args.args[1]
+    assert argv[3] == "serve"
     assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
-        "architectures": [mod._PERFORMANCE_ARCH]
+        "architectures": [mod._VISION_ARCH],
+        "paddlex_vision_batching": True,
+        "paddlex_vision_rope": False,
     }
+    if version_name == "0.33.0":
+        _launch(mod, {"paddlex-vision-batching": True, "paddlex-vision-rope": True})
+        argv = execute.call_args.args[1]
+        assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
+            "architectures": [mod._VISION_ARCH],
+            "paddlex_vision_batching": True,
+            "paddlex_vision_rope": True,
+        }
+    else:
+        with pytest.raises(ValueError, match="vLLM 0.33.0"):
+            _launch(mod, {"paddlex-vision-rope": True})
 
 
-def test_registration_is_lazy_and_only_for_033(backend, monkeypatch):
+@pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0", "0.33.0"])
+def test_registration_is_lazy_and_shared(backend, monkeypatch, version_name):
     mod, version = backend
+    version.return_value = version_name
     registry = SimpleNamespace(register_model=Mock())
     monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(ModelRegistry=registry))
     mod.register_models()
-    arch, loader = registry.register_model.call_args.args
-    assert arch == mod._PERFORMANCE_ARCH
-    assert loader.endswith("_vllm033:" + arch)
-    registry.register_model.reset_mock()
+    registry.register_model.assert_called_once_with(
+        mod._VISION_ARCH, f"{mod._MODEL_MODULE}:{mod._VISION_ARCH}"
+    )
+
+
+@pytest.fixture
+def vision(backend, monkeypatch):
+    _, version = backend
+    package = "paddlex.inference.genai.models.paddleocr_vl_18_09b"
+    monkeypatch.setattr(
+        sys.modules["paddlex.utils.deps"],
+        "is_dep_available",
+        lambda _: True,
+        raising=False,
+    )
+    for pkg in (package, "vllm.model_executor.models.paddleocr_vl", "vllm.multimodal"):
+        monkeypatch.setitem(sys.modules, pkg, ModuleType(pkg))
+    mm = sys.modules["vllm.multimodal"]
+    mm.MULTIMODAL_REGISTRY = SimpleNamespace(
+        register_processor=lambda *a, **k: lambda cls: cls
+    )
+    native = sys.modules["vllm.model_executor.models.paddleocr_vl"]
+
+    class Native:
+        def __init__(self, vllm_config, prefix):
+            self.visual = vllm_config.visual
+
+        def _process_image_input(self, image_input):
+            return "native", image_input
+
+    native.PaddleOCRVLForConditionalGeneration = Native
+    native.SiglipEncoder = type("SiglipEncoder", (), {})
+    for name in (
+        "PaddleOCRVLDummyInputsBuilder",
+        "PaddleOCRVLMultiModalProcessor",
+        "PaddleOCRVLProcessingInfo",
+    ):
+        setattr(native, name, object())
+    name = f"{package}._vllm_vision"
+    monkeypatch.setitem(sys.modules, name, None)
+    module = _load(
+        name, "paddlex/inference/genai/models/paddleocr_vl_18_09b/_vllm_vision.py"
+    )
+    return module, version
+
+
+def test_incompatible_batching_falls_back_without_replacing_encoder(
+    vision, monkeypatch
+):
+    mod, version = vision
+    version.return_value = "0.26.0"
+    encoder = mod.SiglipEncoder()
+    cfg = SimpleNamespace(
+        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
+        model_config=SimpleNamespace(
+            hf_config=SimpleNamespace(paddlex_vision_batching=True)
+        ),
+    )
+    monkeypatch.setattr(
+        mod, "_vision_support", lambda *a: "incompatible vision interface"
+    )
+    model = mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
+    image = object()
+    assert model._process_image_input(image) == ("native", image)
+    assert type(encoder) is mod.SiglipEncoder
+    mod.logging.warning.assert_called_once()
+
+
+def test_batching_mounts_encoder_without_importing_rope(vision, monkeypatch):
+    mod, version = vision
     version.return_value = "0.19.0"
-    mod.register_models()
-    assert registry.register_model.call_args.args[0] == mod._LEGACY_BATCHED_ARCH
-    assert "_vllm019:" in registry.register_model.call_args.args[1]
-    registry.register_model.reset_mock()
-    version.return_value = "0.28.0"
-    mod.register_models()
-    registry.register_model.assert_not_called()
+    encoder = mod.SiglipEncoder()
+    cfg = SimpleNamespace(
+        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
+        model_config=SimpleNamespace(
+            hf_config=SimpleNamespace(paddlex_vision_batching=True)
+        ),
+    )
+    monkeypatch.setattr(mod, "_vision_support", lambda *a: None)
+    model = mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
+    assert model._paddlex_vision_batching
+    assert type(encoder) is mod._PaddleXSiglipEncoder
+    assert not encoder._paddlex_vision_rope
+    assert mod.__name__.rsplit(".", 1)[0] + "._vision_rope" not in sys.modules
+    cfg.model_config.hf_config.paddlex_vision_rope = True
+    with pytest.raises(ValueError, match="vLLM 0.33.0"):
+        mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
 
 
 def test_release_extras_are_separately_pinned(monkeypatch):
