@@ -782,6 +782,35 @@ docker run \
     paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --host 0.0.0.0 --port 8118 --backend vllm
 ```
 
+
+<details>
+<summary>Optional: vLLM 0.33.0 performance profile on A100 (PaddleOCR-VL 1.8)</summary>
+
+The 0.19.0 image and installation stay unchanged; continue to use 0.19.0 for V100/SM70. The separate 0.33.0 x86_64 image uses CUDA 13 and requires a compatible NVIDIA driver. Do not install the two runtimes in the same environment. This profile enables the vision RoPE optimization only for unquantized BF16 PaddleOCR-VL 1.8 with vision FlashAttention on one SM80 GPU. Input resolution and output limits are unchanged. End-to-end validation was done on A100 only. On other GPUs, even where vLLM 0.33.0 is supported, leave this option off and use a native configuration supported by that GPU.
+
+From the repository root, build a PaddleX wheel and a separately tagged image:
+
+```bash
+python -m build --wheel --outdir dist-vllm033
+deploy/genai_vllm_server_docker/build.sh --vllm-version 0.33.0 --pdx-wheel dist-vllm033/paddlex-*.whl
+```
+
+```bash
+docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
+    -v "$PWD/deploy/genai_vllm_server_docker/paddleocr-vl-18-a100.yaml:/a100.yaml:ro" \
+    ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddlex-genai-vllm-server:vllm0.33.0 \
+    paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --backend vllm \
+    --host 0.0.0.0 --port 8080 --backend_config /a100.yaml
+```
+
+`paddlex-vision-performance: true` enables PaddleX fused vision RoPE. It leaves multi-image batching to the existing backend, so enabling or disabling the setting does not change batching behavior. The profile requires PaddleOCR-VL 1.8, vLLM 0.33.0 and one SM80 GPU with BF16, unquantized weights, vision FlashAttention and a compatible vision interface. Unsupported configurations fail at startup. Omit the setting or set it to `false` to use native RoPE. On V100/SM70, keep the native vLLM 0.19.0 FP16 path.
+
+`api-server-count: 2` starts two HTTP frontend processes sharing one GPU inference engine. Look for `Started 2 API server processes` and `PaddleX FP32 vision RoPE enabled` in the startup logs. The example's fixed 8 GiB KV cache is for same-GPU HPS deployment, not a total VRAM requirement. These native vLLM settings can be tuned separately; `prefill-schedule-interval` is only supported in the 0.33.0 profile.
+
+Both versions use the same `paddlex_genai_server` entry point but are installed in separate Python environments or images. On supported NVIDIA configurations, `api-server-count` works with either version; 0.19.0 defaults to one frontend. PaddleX shares its per-region submission and concurrent scheduling for remote VLMs independently of the server version. Intermediate versions are not validated deployment profiles.
+
+</details>
+
 #### 3.1.2 Starting Through PaddleX CLI
 
 VLM server dependencies may differ from those of the local pipeline client. Create a separate virtual environment for the VLM service. The following vLLM installation command uses CUDA 12.9 on NVIDIA and requires Python 3.10–3.13.

@@ -29,6 +29,7 @@ _EXTRA_PATTERN = re.compile(
 )
 _COLLECTIVE_EXTRA_NAMES = {"base", "plugins", "all"}
 
+_VLLM_PERFORMANCE_EXTRA = "genai-vllm-server-033"
 _SUPPORTED_GENAI_ENGINE_BACKENDS = ["fastdeploy-server", "vllm-server", "sglang-server"]
 
 
@@ -265,6 +266,19 @@ def get_paddle2onnx_dep_specs():
     return dep_specs
 
 
+def _is_vllm_version(expected):
+    version = get_dep_version("vllm")
+    return version is not None and Version(version).public == expected
+
+
+def is_vllm_legacy_version():
+    return _is_vllm_version("0.19.0")
+
+
+def is_vllm_performance_version():
+    return _is_vllm_version("0.33.0")
+
+
 def is_genai_engine_plugin_available(backend="any"):
     if backend != "any" and backend not in _SUPPORTED_GENAI_ENGINE_BACKENDS:
         raise ValueError(f"Unknown backend type: {backend}")
@@ -276,6 +290,10 @@ def is_genai_engine_plugin_available(backend="any"):
     else:
         if "fastdeploy" in backend:
             return is_dep_available("fastdeploy")
+        elif backend == "vllm-server" and is_vllm_performance_version():
+            return _VLLM_PERFORMANCE_EXTRA in EXTRAS and is_extra_available(
+                _VLLM_PERFORMANCE_EXTRA
+            )
         elif is_extra_available(f"genai-{backend}"):
             from .env import is_cuda_available
 
@@ -322,6 +340,10 @@ def get_genai_fastdeploy_spec(device_type):
 
 
 def get_genai_dep_specs(type):
+    if type == "vllm-server-033":
+        return [
+            spec for specs in EXTRAS[_VLLM_PERFORMANCE_EXTRA].values() for spec in specs
+        ]
     if type != "client" and type not in _SUPPORTED_GENAI_ENGINE_BACKENDS:
         raise ValueError(f"Invalid type: {type}")
     if "fastdeploy" in type:

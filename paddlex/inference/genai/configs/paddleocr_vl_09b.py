@@ -13,7 +13,7 @@
 # limitations under the License.
 
 
-from ....utils.deps import require_deps
+from ....utils.deps import is_vllm_legacy_version, require_deps
 
 __all__ = ["get_config"]
 
@@ -63,7 +63,9 @@ def get_config(backend):
                 "gpu-memory-utilization": 0.5,
                 "max-model-len": 16384,
                 "max-num-batched-tokens": 131072,
-                "api-server-count": 4,
+                # The old direct 0.19 launcher effectively ran one frontend.
+                # Preserve that default when switching to the native serve CLI.
+                "api-server-count": 1 if is_vllm_legacy_version() else 4,
             }
     elif backend == "sglang":
         return {

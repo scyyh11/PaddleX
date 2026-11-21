@@ -3,16 +3,17 @@
 set -e
 
 usage() {
-    echo "Usage: $0 (--pdx-version VERSION | --pdx-wheel PATH) [--tag-suffix TAG]"
+    echo "Usage: $0 (--pdx-version VERSION | --pdx-wheel PATH) [--tag-suffix TAG] [--vllm-version 0.19.0|0.33.0]"
 }
 
 paddlex_version=''
 paddlex_wheel=''
-tag_suffix='latest'
+tag_suffix=''
+vllm_version='0.19.0'
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --pdx-version|--pdx-wheel|--tag-suffix)
+        --pdx-version|--pdx-wheel|--tag-suffix|--vllm-version)
             if [[ -z "${2:-}" || "$2" == --* ]]; then
                 echo "Missing value for $1" >&2
                 usage >&2
@@ -22,6 +23,7 @@ while [[ $# -gt 0 ]]; do
                 --pdx-version) paddlex_version="==$2" ;;
                 --pdx-wheel) paddlex_wheel="$2" ;;
                 --tag-suffix) tag_suffix="$2" ;;
+                --vllm-version) vllm_version="$2" ;;
             esac
             shift 2
             ;;
@@ -43,6 +45,13 @@ if [[ -n "$paddlex_version" && -n "$paddlex_wheel" ]] ||
     exit 2
 fi
 
+case "$vllm_version" in
+    0.19.0) tag_suffix="${tag_suffix:-latest}" ;;
+    0.33.0) tag_suffix="${tag_suffix:-vllm0.33.0}" ;;
+    *) echo "Unsupported vLLM version: $vllm_version" >&2; exit 2 ;;
+esac
+vllm_base_image="${VLLM_BASE_IMAGE:-vllm/vllm-openai:v${vllm_version}-x86_64}"
+
 script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 context_dir="$script_dir"
 wheel_name=''
@@ -63,7 +72,8 @@ docker build \
     -t "ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddlex-genai-vllm-server:${tag_suffix}" \
     --build-arg PADDLEX_VERSION="$paddlex_version" \
     --build-arg PADDLEX_WHEEL="$wheel_name" \
-    --build-arg VLLM_BASE_IMAGE \
+    --build-arg VLLM_BASE_IMAGE="$vllm_base_image" \
+    --build-arg VLLM_VERSION="$vllm_version" \
     --build-arg PIP_INDEX_URL \
     --build-arg PIP_TRUSTED_HOST \
     --build-arg http_proxy="${http_proxy:-}" \

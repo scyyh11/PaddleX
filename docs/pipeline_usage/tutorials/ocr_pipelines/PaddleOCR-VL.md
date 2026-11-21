@@ -764,6 +764,35 @@ docker run \
     paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --host 0.0.0.0 --port 8118 --backend vllm
 ```
 
+
+<details>
+<summary>可选：A100 上使用 vLLM 0.33.0 性能档（PaddleOCR-VL 1.8）</summary>
+
+0.19.0 镜像和安装命令不变（V100/SM70 继续选 0.19.0）。性能档使用带 CUDA 13 的 vLLM 0.33.0 x86_64 基础镜像，需要兼容该镜像的 NVIDIA 驱动；不要与 0.19.0 安装在同一个环境。此档的视觉 RoPE 优化仅对单张 SM80 GPU 上 BF16、未量化且使用视觉 FlashAttention 的 PaddleOCR-VL 1.8 启用，不改变输入分辨率或生成上限。端到端仅在 A100 上验证。其他 GPU 即使可以运行 vLLM 0.33.0，也不要启用此开关；请使用该 GPU 支持的原生配置。
+
+从本仓库根目录构建 PaddleX wheel 及新镜像（不会覆盖默认镜像标签）：
+
+```bash
+python -m build --wheel --outdir dist-vllm033
+deploy/genai_vllm_server_docker/build.sh --vllm-version 0.33.0 --pdx-wheel dist-vllm033/paddlex-*.whl
+```
+
+```bash
+docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
+    -v "$PWD/deploy/genai_vllm_server_docker/paddleocr-vl-18-a100.yaml:/a100.yaml:ro" \
+    ccr-2vdh3abv-pub.cnc.bj.baidubce.com/paddlepaddle/paddlex-genai-vllm-server:vllm0.33.0 \
+    paddlex_genai_server --model_name PaddleOCR-VL-1.8-0.9B --backend vllm \
+    --host 0.0.0.0 --port 8080 --backend_config /a100.yaml
+```
+
+`paddlex-vision-performance: true` 启用 PaddleX 融合视觉 RoPE。多图合批仍由现有后端负责，开启或关闭此配置不会改变合批行为。性能档要求 PaddleOCR-VL 1.8、vLLM 0.33.0、单张 SM80 GPU、BF16、未量化、视觉 FlashAttention 及兼容的视觉接口。不满足要求时启动会报错；省略此配置或设为 `false` 可使用原生 RoPE。V100/SM70 继续使用 vLLM 0.19.0 原生 FP16 路径。
+
+`api-server-count: 2` 启动两个 HTTP 进程，仍只加载一个 GPU 推理引擎。启动日志应出现 `Started 2 API server processes` 和 `PaddleX FP32 vision RoPE enabled`。示例固定 8 GiB KV 缓存用于同卡 HPS 部署，不代表总显存需求。这些 vLLM 原生参数可以单独调整；`prefill-schedule-interval` 只用于 0.33.0 档。
+
+两个版本共用 `paddlex_genai_server` 入口，但仍在不同 Python 环境或镜像中安装。在支持的 NVIDIA 配置上，`api-server-count` 对两个版本都有效；0.19.0 默认使用一个 HTTP 前端。PaddleX 流水线对远程 VLM 共用逐块提交和并发调度，不依赖服务器版本。中间版本不是已验证的部署档。
+
+</details>
+
 #### 3.1.2 通过 PaddleX CLI 启动
 
 VLM 服务端依赖可能与本地产线客户端环境存在差异，因此建议为 VLM 推理服务单独创建虚拟环境。以下 vLLM 安装命令适用于使用 CUDA 12.9 的 NVIDIA 环境，需使用 Python 3.10–3.13。

@@ -330,6 +330,8 @@ def install(args):
             )
 
     def _install_genai_deps(plugin_types):
+        if {"vllm-server", "vllm-server-033"}.issubset(plugin_types):
+            sys.exit("Install the two vLLM server profiles in separate environments.")
         fd_plugin_types = []
         not_fd_plugin_types = []
         for plugin_type in plugin_types:
