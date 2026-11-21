@@ -41,8 +41,11 @@ def register_models():
 
     if is_genai_engine_plugin_available("vllm-server"):
         # Registration is lazy. The stock architecture remains untouched;
-        # the shared vision implementation is selected only on opt-in.
-        ModelRegistry.register_model(_VISION_ARCH, f"{_MODEL_MODULE}:{_VISION_ARCH}")
+        # only the validated RoPE runtime registers the opt-in alias.
+        if is_vllm_performance_version():
+            ModelRegistry.register_model(
+                _VISION_ARCH, f"{_MODEL_MODULE}:{_VISION_ARCH}"
+            )
         for model_name in ALL_MODEL_INFO:
             if (
                 not is_integrated_model_available(model_name, "vllm")
@@ -59,9 +62,10 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
     legacy, modern = is_vllm_legacy_version(), is_vllm_performance_version()
     if {"paddlex-vision-batching", "paddlex-vision-rope"} & config.keys():
         raise ValueError(
-            "The separate paddlex-vision-batching and paddlex-vision-rope options "
-            f"have been removed. Use {_VISION_PERFORMANCE_OPTION}: true to enable "
-            "both optimizations, or omit these options to use native vLLM vision."
+            "The paddlex-vision-batching and paddlex-vision-rope options have been "
+            f"removed. Remove both keys. Use {_VISION_PERFORMANCE_OPTION}: true "
+            "only to enable fused RoPE on the supported A100 profile. "
+            "Vision batching is left to the backend."
         )
     vision_performance = config.pop(_VISION_PERFORMANCE_OPTION, False)
     if not isinstance(vision_performance, bool):
@@ -75,15 +79,7 @@ def run_vllm_server(host, port, model_name, model_dir, config, chat_template_pat
             raise ValueError(
                 f"{_VISION_PERFORMANCE_OPTION} cannot be combined with hf-overrides."
             )
-        # Keep the two parts independently testable at model construction time,
-        # without exposing their internal switches in the serving configuration.
-        config["hf-overrides"] = json.dumps(
-            {
-                "architectures": [_VISION_ARCH],
-                "paddlex_vision_batching": True,
-                "paddlex_vision_rope": True,
-            }
-        )
+        config["hf-overrides"] = json.dumps({"architectures": [_VISION_ARCH]})
     if legacy and "prefill-schedule-interval" in config:
         raise ValueError("prefill-schedule-interval requires vLLM 0.33.0.")
 

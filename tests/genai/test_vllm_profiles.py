@@ -81,7 +81,7 @@ def _launch(mod, config):
     )
 
 
-def test_a100_profile_enables_both_optimizations(backend, monkeypatch):
+def test_a100_profile_selects_rope_without_batching_override(backend, monkeypatch):
     import yaml
 
     mod, _ = backend
@@ -100,8 +100,6 @@ def test_a100_profile_enables_both_optimizations(backend, monkeypatch):
     assert not any(arg.startswith("--paddlex-vision-") for arg in argv)
     assert json.loads(argv[argv.index("--hf-overrides") + 1]) == {
         "architectures": [mod._VISION_ARCH],
-        "paddlex_vision_batching": True,
-        "paddlex_vision_rope": True,
     }
     assert cfg["paddlex-vision-performance"] is True
 
@@ -169,27 +167,25 @@ def test_profile_requires_cuda(backend, monkeypatch):
 
 
 @pytest.mark.parametrize("version_name", ["0.19.0", "0.26.0", "0.33.0"])
-def test_registration_is_lazy_and_shared(backend, monkeypatch, version_name):
+def test_registration_is_lazy_and_rope_version_gated(
+    backend, monkeypatch, version_name
+):
     mod, version = backend
     version.return_value = version_name
     registry = SimpleNamespace(register_model=Mock())
     monkeypatch.setitem(sys.modules, "vllm", SimpleNamespace(ModelRegistry=registry))
     mod.register_models()
-    registry.register_model.assert_called_once_with(
-        mod._VISION_ARCH, f"{mod._MODEL_MODULE}:{mod._VISION_ARCH}"
-    )
+    if version_name == "0.33.0":
+        registry.register_model.assert_called_once_with(
+            mod._VISION_ARCH, f"{mod._MODEL_MODULE}:{mod._VISION_ARCH}"
+        )
+    else:
+        registry.register_model.assert_not_called()
 
 
 @pytest.fixture
 def vision(backend, monkeypatch):
-    _, version = backend
     package = "paddlex.inference.genai.models.paddleocr_vl_18_09b"
-    monkeypatch.setattr(
-        sys.modules["paddlex.utils.deps"],
-        "is_dep_available",
-        lambda _: True,
-        raising=False,
-    )
     for pkg in (package, "vllm.model_executor.models.paddleocr_vl", "vllm.multimodal"):
         monkeypatch.setitem(sys.modules, pkg, ModuleType(pkg))
     mm = sys.modules["vllm.multimodal"]
@@ -218,72 +214,43 @@ def vision(backend, monkeypatch):
     module = _load(
         name, "paddlex/inference/genai/models/paddleocr_vl_18_09b/_vllm_vision.py"
     )
-    return module, version
+    return module
 
 
-def test_incompatible_batching_falls_back_without_replacing_encoder(
-    vision, monkeypatch
-):
-    mod, version = vision
-    version.return_value = "0.26.0"
+def test_rope_alias_inherits_native_image_batching(vision, monkeypatch):
+    mod = vision
+    attention = type("NativeAttention", (), {})()
     encoder = mod.SiglipEncoder()
+    encoder.layers = [SimpleNamespace(self_attn=attention)]
     cfg = SimpleNamespace(
-        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
-        model_config=SimpleNamespace(
-            hf_config=SimpleNamespace(paddlex_vision_batching=True)
-        ),
-    )
-    monkeypatch.setattr(
-        mod, "_vision_support", lambda *a: "incompatible vision interface"
-    )
-    model = mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
-    image = object()
-    assert model._process_image_input(image) == ("native", image)
-    assert type(encoder) is mod.SiglipEncoder
-    mod.logging.warning.assert_called_once()
-
-
-def test_batching_mounts_encoder_without_importing_rope(vision, monkeypatch):
-    mod, version = vision
-    version.return_value = "0.19.0"
-    encoder = mod.SiglipEncoder()
-    cfg = SimpleNamespace(
-        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
-        model_config=SimpleNamespace(
-            hf_config=SimpleNamespace(paddlex_vision_batching=True)
-        ),
+        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder))
     )
     monkeypatch.setattr(mod, "_vision_support", lambda *a: None)
-    model = mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
-    assert model._paddlex_vision_batching
+    name = mod.__name__.rsplit(".", 1)[0] + "._vision_rope"
+    rope = ModuleType(name)
+    rope._PaddleXSiglipAttention = type("RopeAttention", (type(attention),), {})
+    monkeypatch.setitem(sys.modules, name, rope)
+    model_cls = mod.PaddleXPaddleOCRVLForConditionalGeneration
+    assert model_cls._process_image_input is model_cls.__bases__[0]._process_image_input
+    model = model_cls(vllm_config=cfg)
+    image = object()
+    assert model._process_image_input(image) == ("native", image)
     assert type(encoder) is mod._PaddleXSiglipEncoder
-    assert not encoder._paddlex_vision_rope
-    assert mod.__name__.rsplit(".", 1)[0] + "._vision_rope" not in sys.modules
-    cfg.model_config.hf_config.paddlex_vision_rope = True
-    with pytest.raises(ValueError, match="vLLM 0.33.0"):
-        mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
+    assert type(attention) is rope._PaddleXSiglipAttention
 
 
-def test_unsupported_profile_fail_fast_without_mounting_batching(vision, monkeypatch):
-    mod, _ = vision
+def test_unsupported_profile_does_not_mount_rope(vision, monkeypatch):
+    mod = vision
     encoder = mod.SiglipEncoder()
     cfg = SimpleNamespace(
-        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder)),
-        model_config=SimpleNamespace(
-            hf_config=SimpleNamespace(
-                paddlex_vision_batching=True,
-                paddlex_vision_rope=True,
-            )
-        ),
+        visual=SimpleNamespace(vision_model=SimpleNamespace(encoder=encoder))
     )
     monkeypatch.setattr(mod, "_vision_support", lambda *a: "requires one SM80 GPU")
     with pytest.raises(
-        ValueError,
-        match="vision performance profile unavailable: requires one SM80 GPU",
+        ValueError, match="vision RoPE unavailable: requires one SM80 GPU"
     ):
         mod.PaddleXPaddleOCRVLForConditionalGeneration(vllm_config=cfg)
     assert type(encoder) is mod.SiglipEncoder
-    mod.logging.warning.assert_not_called()
 
 
 def test_release_extras_are_separately_pinned(monkeypatch):

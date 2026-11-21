@@ -785,9 +785,9 @@ docker run --rm --gpus device=0 --shm-size 8g -p 127.0.0.1:8118:8080 \
     --host 0.0.0.0 --port 8080 --backend_config /a100.yaml
 ```
 
-`paddlex-vision-performance: true` 同时开启 PaddleX 视觉合批和融合 RoPE，不覆盖 vLLM 原生模型注册，也不会重复合批。性能档要求 PaddleOCR-VL 1.8、vLLM 0.33.0、单张 SM80 GPU、BF16、未量化、视觉 FlashAttention 及兼容的视觉接口。不满足要求时启动会明确报错，不会只开启其中一项。省略此配置或设为 `false` 可使用 vLLM 原生视觉路径。V100/SM70 继续使用 vLLM 0.19.0 原生 FP16 路径。
+`paddlex-vision-performance: true` 启用 PaddleX 融合视觉 RoPE。多图合批仍由现有后端负责，开启或关闭此配置不会改变合批行为。性能档要求 PaddleOCR-VL 1.8、vLLM 0.33.0、单张 SM80 GPU、BF16、未量化、视觉 FlashAttention 及兼容的视觉接口。不满足要求时启动会报错；省略此配置或设为 `false` 可使用原生 RoPE。V100/SM70 继续使用 vLLM 0.19.0 原生 FP16 路径。
 
-`api-server-count: 2` 启动两个 HTTP 进程，仍只加载一个 GPU 推理引擎。启动日志应出现 `Started 2 API server processes`、`PaddleX vision batching enabled` 和 `PaddleX FP32 vision RoPE enabled`。示例固定 8 GiB KV 缓存用于同卡 HPS 部署，不代表总显存需求。这些 vLLM 原生参数可以单独调整；`prefill-schedule-interval` 只用于 0.33.0 档。
+`api-server-count: 2` 启动两个 HTTP 进程，仍只加载一个 GPU 推理引擎。启动日志应出现 `Started 2 API server processes` 和 `PaddleX FP32 vision RoPE enabled`。示例固定 8 GiB KV 缓存用于同卡 HPS 部署，不代表总显存需求。这些 vLLM 原生参数可以单独调整；`prefill-schedule-interval` 只用于 0.33.0 档。
 
 两个版本共用 `paddlex_genai_server` 入口，但仍在不同 Python 环境或镜像中安装。在支持的 NVIDIA 配置上，`api-server-count` 对两个版本都有效；0.19.0 默认使用一个 HTTP 前端。PaddleX 流水线对远程 VLM 共用逐块提交和并发调度，不依赖服务器版本。中间版本不是已验证的部署档。
 
