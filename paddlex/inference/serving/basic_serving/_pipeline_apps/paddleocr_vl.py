@@ -12,12 +12,14 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from typing import Any, Dict, List
+from typing import Any
 
 from .....utils.deps import function_requires_deps, is_dep_available
-from ...app_shared.document_export import (
-    build_pipeline_exports,
-    refill_paddleocr_vl_images_from_markdown,
+from ...app_shared.document_export import InvalidMarkdownImageError
+from ...app_shared.paddleocr_vl import (
+    build_infer_result,
+    build_restructure_pages_result,
+    get_inference_kwargs,
 )
 from ...infra import utils as serving_utils
 from ...infra.config import AppConfig
@@ -30,13 +32,11 @@ from ...schemas.paddleocr_vl import (
     RestructurePagesRequest,
     RestructurePagesResult,
 )
-from ...schemas.shared.export import normalize_output_formats
 from .._app import create_app, primary_operation
-from ._common import common
 from ._common import ocr as ocr_common
 
 if is_dep_available("fastapi"):
-    from fastapi import FastAPI
+    from fastapi import FastAPI, HTTPException
 
 
 @function_requires_deps("fastapi")
@@ -63,118 +63,22 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
         )
         images, data_info = await ocr_common.get_images(request, ctx)
 
-        result = await pipeline.infer(
+        preds = await pipeline.infer(images, **get_inference_kwargs(request))
+        result = await serving_utils.call_async(
+            build_infer_result,
+            pipeline.pipeline,
+            request,
             images,
-            use_doc_orientation_classify=request.useDocOrientationClassify,
-            use_doc_unwarping=request.useDocUnwarping,
-            use_layout_detection=request.useLayoutDetection,
-            use_layout_deform=request.useLayoutDeform,
-            layout_deform_conf_thresh=request.layoutDeformConfThresh,
-            layout_deform_min_roll=request.layoutDeformMinRoll,
-            layout_deform_min_shear=request.layoutDeformMinShear,
-            layout_deform_min_keystone=request.layoutDeformMinKeystone,
-            use_chart_recognition=request.useChartRecognition,
-            use_seal_recognition=request.useSealRecognition,
-            use_ocr_for_image_block=request.useOcrForImageBlock,
-            layout_threshold=request.layoutThreshold,
-            layout_nms=request.layoutNms,
-            layout_unclip_ratio=request.layoutUnclipRatio,
-            layout_merge_bboxes_mode=request.layoutMergeBboxesMode,
-            layout_shape_mode=request.layoutShapeMode,
-            prompt_label=request.promptLabel,
-            format_block_content=request.formatBlockContent,
-            repetition_penalty=request.repetitionPenalty,
-            temperature=request.temperature,
-            top_p=request.topP,
-            min_pixels=request.minPixels,
-            max_pixels=request.maxPixels,
-            max_new_tokens=request.maxNewTokens,
-            merge_layout_blocks=request.mergeLayoutBlocks,
-            markdown_ignore_labels=request.markdownIgnoreLabels,
-            vlm_extra_args=request.vlmExtraArgs,
+            data_info,
+            preds,
+            log_id=log_id,
+            visualize=visualize_enabled,
+            file_storage=ctx.extra["file_storage"],
+            return_urls=ctx.extra["return_urls"],
+            url_expires_in=ctx.extra["url_expires_in"],
+            max_output_img_size=ctx.extra["max_output_img_size"],
         )
-
-        if request.restructurePages:
-            result = await serving_utils.call_async(
-                pipeline.pipeline.restructure_pages,
-                result,
-                merge_tables=request.mergeTables,
-                relevel_titles=request.relevelTitles,
-                concatenate_pages=False,
-            )
-            result = list(result)
-
-        layout_parsing_results: List[Dict[str, Any]] = []
-        for i, (img, item) in enumerate(zip(images, result)):
-            pruned_res = common.prune_result(item.json["res"])
-            # XXX
-            md_data = item._to_markdown(
-                pretty=request.prettifyMarkdown,
-                show_formula_number=request.showFormulaNumber,
-            )
-            md_text = md_data["markdown_texts"]
-            if request.returnMarkdownImages:
-                md_imgs = await serving_utils.call_async(
-                    common.postprocess_images,
-                    md_data["markdown_images"],
-                    log_id,
-                    filename_template=f"markdown_{i}/{{key}}",
-                    file_storage=ctx.extra["file_storage"],
-                    return_urls=ctx.extra["return_urls"],
-                    url_expires_in=ctx.extra["url_expires_in"],
-                    max_img_size=ctx.extra["max_output_img_size"],
-                )
-            else:
-                md_imgs = None
-            if visualize_enabled:
-                imgs = {
-                    "input_img": img,
-                    **item.img,
-                }
-                imgs = await serving_utils.call_async(
-                    common.postprocess_images,
-                    imgs,
-                    log_id,
-                    filename_template=f"{{key}}_{i}.jpg",
-                    file_storage=ctx.extra["file_storage"],
-                    return_urls=ctx.extra["return_urls"],
-                    url_expires_in=ctx.extra["url_expires_in"],
-                    max_img_size=ctx.extra["max_output_img_size"],
-                )
-            else:
-                imgs = {}
-            entry = dict(
-                prunedResult=pruned_res,
-                markdown=dict(
-                    text=md_text,
-                    images=md_imgs,
-                ),
-                outputImages=(
-                    {k: v for k, v in imgs.items() if k != "input_img"}
-                    if imgs
-                    else None
-                ),
-                inputImage=imgs.get("input_img"),
-            )
-            if normalize_output_formats(request.outputFormats):
-                entry["exports"] = await serving_utils.call_async(
-                    build_pipeline_exports,
-                    request.outputFormats,
-                    item,
-                    log_id=log_id,
-                    file_storage=ctx.extra["file_storage"],
-                    return_urls=ctx.extra["return_urls"],
-                    url_expires_in=ctx.extra["url_expires_in"],
-                )
-            layout_parsing_results.append(entry)
-
-        return AIStudioResultResponse[InferResult](
-            logId=log_id,
-            result=InferResult(
-                layoutParsingResults=layout_parsing_results,
-                dataInfo=data_info,
-            ),
-        )
+        return AIStudioResultResponse[InferResult](logId=log_id, result=result)
 
     @primary_operation(
         app,
@@ -184,99 +88,21 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
     async def _restructure_pages(
         request: RestructurePagesRequest,
     ) -> AIStudioResultResponse[RestructurePagesResult]:
-        def _to_original_result(pruned_res, page_index):
-            res = {**pruned_res, "input_path": "", "page_index": page_index}
-            orig_res = {"res": res}
-            return orig_res
-
-        pipeline = ctx.pipeline
-
         log_id = request.logId if request.logId else serving_utils.generate_log_id()
-
-        original_results = []
-        markdown_images = {}
-        for i, page in enumerate(request.pages):
-            orig_res = _to_original_result(page.prunedResult, i)
-            original_results.append(orig_res)
-            if request.concatenatePages and page.markdownImages:
-                markdown_images.update(page.markdownImages)
-
-        restructured_results = await serving_utils.call_async(
-            pipeline.pipeline.restructure_pages,
-            original_results,
-            merge_tables=request.mergeTables,
-            relevel_titles=request.relevelTitles,
-            concatenate_pages=request.concatenatePages,
-        )
-        restructured_results = list(restructured_results)
-
-        layout_parsing_results = []
-        if request.concatenatePages:
-            layout_parsing_result = {}
-            layout_parsing_result["prunedResult"] = common.prune_result(
-                restructured_results[0].json["res"]
+        try:
+            result = await serving_utils.call_async(
+                build_restructure_pages_result,
+                ctx.pipeline.pipeline,
+                request,
+                log_id=log_id,
+                file_storage=ctx.extra["file_storage"],
+                return_urls=ctx.extra["return_urls"],
+                url_expires_in=ctx.extra["url_expires_in"],
             )
-            # XXX
-            md_data = restructured_results[0]._to_markdown(
-                pretty=request.prettifyMarkdown,
-                show_formula_number=request.showFormulaNumber,
-            )
-            layout_parsing_result["markdown"] = dict(
-                text=md_data["markdown_texts"],
-                images=markdown_images if request.returnMarkdownImages else None,
-            )
-            if normalize_output_formats(request.outputFormats):
-                res_obj = restructured_results[0]
-                refill_paddleocr_vl_images_from_markdown(res_obj, markdown_images)
-                layout_parsing_result["exports"] = await serving_utils.call_async(
-                    build_pipeline_exports,
-                    request.outputFormats,
-                    res_obj,
-                    log_id=log_id,
-                    file_storage=ctx.extra["file_storage"],
-                    return_urls=ctx.extra["return_urls"],
-                    url_expires_in=ctx.extra["url_expires_in"],
-                )
-            layout_parsing_results.append(layout_parsing_result)
-        else:
-            for new_res, old_page in zip(restructured_results, request.pages):
-                layout_parsing_result = {}
-                layout_parsing_result["prunedResult"] = common.prune_result(
-                    new_res.json["res"]
-                )
-                # XXX
-                md_data = new_res._to_markdown(
-                    pretty=request.prettifyMarkdown,
-                    show_formula_number=request.showFormulaNumber,
-                )
-                layout_parsing_result["markdown"] = dict(
-                    text=md_data["markdown_texts"],
-                    images=(
-                        old_page.markdownImages
-                        if request.returnMarkdownImages
-                        else None
-                    ),
-                )
-                if normalize_output_formats(request.outputFormats):
-                    refill_paddleocr_vl_images_from_markdown(
-                        new_res, old_page.markdownImages
-                    )
-                    layout_parsing_result["exports"] = await serving_utils.call_async(
-                        build_pipeline_exports,
-                        request.outputFormats,
-                        new_res,
-                        log_id=log_id,
-                        file_storage=ctx.extra["file_storage"],
-                        return_urls=ctx.extra["return_urls"],
-                        url_expires_in=ctx.extra["url_expires_in"],
-                    )
-                layout_parsing_results.append(layout_parsing_result)
-
+        except InvalidMarkdownImageError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return AIStudioResultResponse[RestructurePagesResult](
-            logId=log_id,
-            result=RestructurePagesResult(
-                layoutParsingResults=layout_parsing_results,
-            ),
+            logId=log_id, result=result
         )
 
     return app

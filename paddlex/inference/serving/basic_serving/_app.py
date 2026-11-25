@@ -28,12 +28,11 @@ from typing import (
     List,
     Optional,
     Tuple,
-    TypedDict,
     TypeVar,
 )
 
 import pydantic
-from typing_extensions import ParamSpec, TypeGuard
+from typing_extensions import ParamSpec
 
 from ....utils import logging
 from ....utils.deps import class_requires_deps, function_requires_deps, is_dep_available
@@ -41,7 +40,13 @@ from ....utils.flags import SERVING_SERIAL_PIPELINE_CALLS
 from ...pipelines import BasePipeline
 from ..infra.config import AppConfig
 from ..infra.models import AIStudioNoResultResponse
-from ..infra.utils import call_async, generate_log_id
+from ..infra.storage import InvalidStoragePathError
+from ..infra.utils import (
+    PipelineOutputError,
+    call_async,
+    collect_pipeline_predictions,
+    generate_log_id,
+)
 
 if is_dep_available("aiohttp"):
     import aiohttp
@@ -56,18 +61,6 @@ if is_dep_available("starlette"):
 PipelineT = TypeVar("PipelineT", bound=BasePipeline)
 P = ParamSpec("P")
 R = TypeVar("R")
-
-
-class _Error(TypedDict):
-    error: str
-
-
-def _is_error(obj: object) -> TypeGuard[_Error]:
-    return (
-        isinstance(obj, dict)
-        and obj.keys() == {"error"}
-        and isinstance(obj["error"], str)
-    )
 
 
 # XXX: Since typing info (e.g., the pipeline class) cannot be easily obtained
@@ -97,16 +90,12 @@ class PipelineWrapper(Generic[PipelineT]):
 
     async def infer(self, *args: Any, **kwargs: Any) -> List[Any]:
         def _infer(*args, **kwargs) -> List[Any]:
-            output: list = []
-            with contextlib.closing(self._pipeline.predict(*args, **kwargs)) as it:
-                for item in it:
-                    if _is_error(item):
-                        raise fastapi.HTTPException(
-                            status_code=500, detail=item["error"]
-                        )
-                    output.append(item)
-
-            return output
+            try:
+                return collect_pipeline_predictions(
+                    self._pipeline.predict(*args, **kwargs)
+                )
+            except PipelineOutputError as exc:
+                raise fastapi.HTTPException(status_code=500, detail=str(exc)) from exc
 
         return await self.call(_infer, *args, **kwargs)
 
@@ -272,6 +261,14 @@ def create_app(
             )
         )
         return JSONResponse(content=json_compatible_data, status_code=exc.status_code)
+
+    @app.exception_handler(InvalidStoragePathError)
+    async def _storage_path_exception_handler(
+        request: fastapi.Request, exc: InvalidStoragePathError
+    ) -> JSONResponse:
+        return await _http_exception_handler(
+            request, HTTPException(status_code=422, detail=str(exc))
+        )
 
     @app.exception_handler(Exception)
     async def _unexpected_exception_handler(

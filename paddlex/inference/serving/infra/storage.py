@@ -14,7 +14,7 @@
 
 import abc
 from os import PathLike
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Optional, Protocol, Union, runtime_checkable
 
 from pydantic import BaseModel, Discriminator, SecretStr, TypeAdapter
@@ -28,6 +28,8 @@ __all__ = [
     "BOSConfig",
     "FileStorageConfig",
     "SupportsGetURL",
+    "InvalidStoragePathError",
+    "validate_output_log_id",
     "Storage",
     "InMemoryStorage",
     "FileSystemStorage",
@@ -97,10 +99,24 @@ class InMemoryStorage(Storage):
         del self._data[key]
 
 
+class InvalidStoragePathError(ValueError):
+    """The output path is invalid or outside the configured storage directory."""
+
+
+def validate_output_log_id(log_id: str) -> None:
+    if (
+        not log_id
+        or log_id in {".", ".."}
+        or any(separator in log_id for separator in ("/", "\\", "\x00"))
+        or PureWindowsPath(log_id).drive
+    ):
+        raise InvalidStoragePathError("logId must be a single storage path component.")
+
+
 class FileSystemStorage(Storage):
     def __init__(self, config: FileSystemStorageConfig) -> None:
         super().__init__()
-        self._directory = Path(config.directory)
+        self._directory = Path(config.directory).resolve()
         self._directory.mkdir(exist_ok=True)
 
     def get(self, key: str) -> bytes:
@@ -110,7 +126,7 @@ class FileSystemStorage(Storage):
 
     def set(self, key: str, value: bytes) -> None:
         path = self._get_file_path(key)
-        path.parent.mkdir(exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with open(path, "wb") as f:
             f.write(value)
 
@@ -119,7 +135,23 @@ class FileSystemStorage(Storage):
         file_path.unlink(missing_ok=True)
 
     def _get_file_path(self, key: str) -> Path:
-        return self._directory / key
+        key_path = Path(key)
+        if (
+            not key_path.parts
+            or key_path.anchor
+            or ".." in key_path.parts
+            or "\\" in key
+            or "\x00" in key
+            or PureWindowsPath(key).drive
+        ):
+            raise InvalidStoragePathError("Invalid storage key.")
+        path = self._directory / key_path
+        resolved = path.resolve()
+        if resolved == self._directory or not resolved.is_relative_to(self._directory):
+            raise InvalidStoragePathError(
+                "Storage key is outside the configured directory."
+            )
+        return path
 
 
 @class_requires_deps("bce-python-sdk")

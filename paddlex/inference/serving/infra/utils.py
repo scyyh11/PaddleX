@@ -19,6 +19,7 @@ import mimetypes
 import re
 import tempfile
 import uuid
+from contextlib import closing
 from functools import partial
 from typing import Awaitable, Callable, List, Optional, Tuple, TypeVar, Union, overload
 from urllib.parse import parse_qs, urlparse
@@ -449,3 +450,21 @@ def call_async(
     return asyncio.get_running_loop().run_in_executor(
         None, partial(func, *args, **kwargs)
     )
+
+
+class PipelineOutputError(RuntimeError):
+    """The pipeline reported an error in its prediction stream."""
+
+
+def collect_pipeline_predictions(predictions):
+    results = []
+    with closing(predictions) as stream:
+        for item in stream:
+            if (
+                isinstance(item, dict)
+                and item.keys() == {"error"}
+                and isinstance(item["error"], str)
+            ):
+                raise PipelineOutputError(item["error"])
+            results.append(item)
+    return results

@@ -18,6 +18,10 @@ import uuid
 
 from paddlex import create_pipeline
 from paddlex.inference import load_pipeline_config
+from paddlex.inference.serving.infra.storage import (
+    InvalidStoragePathError,
+    validate_output_log_id,
+)
 from paddlex.utils.device import constr_device
 from pydantic import ValidationError
 
@@ -93,6 +97,9 @@ class BaseTritonPythonModel(object):
             inputs = {}
             outputs = {}
             log_ids = []
+            stores_outputs = (
+                getattr(self, "context", {}).get("file_storage") is not None
+            )
             for i, request in enumerate(requests):
                 input_ = pb_utils.get_input_tensor_by_name(
                     request, constants.INPUT_NAME
@@ -101,19 +108,18 @@ class BaseTritonPythonModel(object):
                 input_model_type = self.get_input_model_type()
                 try:
                     input_ = protocol.parse_triton_input(input_, input_model_type)
+                    log_id = (
+                        getattr(input_, "logId", None) or protocol.generate_log_id()
+                    )
+                    if stores_outputs:
+                        validate_output_log_id(log_id)
                     inputs[i] = input_
-                except ValidationError as e:
+                except (ValidationError, InvalidStoragePathError) as e:
                     log_id = protocol.generate_log_id()
                     output = protocol.create_aistudio_output_without_result(
                         422, str(e), log_id=log_id
                     )
                     outputs[i] = output
-                else:
-                    log_id = (
-                        input_.logId
-                        if hasattr(input_, "logId") and input_.logId
-                        else protocol.generate_log_id()
-                    )
                 logging.info("Request %s received", log_id)
                 log_ids.append(log_id)
 
