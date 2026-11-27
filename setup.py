@@ -47,6 +47,7 @@ BASE_DEP_SPECS = {
     "langchain-text-splitters": ">= 0.2, < 1.0",
     "lxml": "",
     "latex2mathml": "",
+    "lightgbm": "",
     "matplotlib": "",
     "modelscope": ">= 1.28.0",
     "numpy": ">= 1.24, < 2.4",
@@ -240,6 +241,10 @@ EXTRAS = {
         ],
         "paddle2onnx": [
             "paddle2onnx == 2.0.2rc3",
+        ],
+        "doc-postprocess": [
+            "joblib",
+            "lightgbm",
         ],
         "serving": [
             "aiohttp >= 3.9",

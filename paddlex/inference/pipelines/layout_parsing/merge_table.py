@@ -141,9 +141,13 @@ def is_skippable(block, allowed_labels):
     return False
 
 
-def can_merge_tables(prev_page, prev_block, curr_page, curr_block):
+def can_merge_tables(prev_page, prev_block, curr_page, curr_block, soup_factory=None):
 
-    from bs4 import BeautifulSoup
+    if soup_factory is None:
+        from bs4 import BeautifulSoup
+
+        def soup_factory(html):
+            return BeautifulSoup(html, "html.parser")
 
     x0, y0, x1, y1 = prev_block.bbox
     prev_width = x1 - x0
@@ -176,8 +180,8 @@ def can_merge_tables(prev_page, prev_block, curr_page, curr_block):
     html_curr = curr_block.content
     if not html_prev or not html_curr:
         return False, None, None
-    soup_prev = BeautifulSoup(html_prev, "html.parser")
-    soup_curr = BeautifulSoup(html_curr, "html.parser")
+    soup_prev = soup_factory(html_prev)
+    soup_curr = soup_factory(html_curr)
 
     total_cols_prev = calculate_table_total_columns(soup_prev)
     total_cols_curr = calculate_table_total_columns(soup_curr)
@@ -197,7 +201,9 @@ def perform_table_merge(soup_prev, soup_curr):
     return str(soup_prev)
 
 
-def merge_tables_across_pages(pages):
+def merge_tables_across_pages(pages, soup_factory=None, table_merger=None):
+    if table_merger is None:
+        table_merger = perform_table_merge
     for i in range(len(pages) - 1, 0, -1):
         page_curr = pages[i]
         page_prev = pages[i - 1]
@@ -219,13 +225,17 @@ def merge_tables_across_pages(pages):
         # both curr_block and prev_block should not be None
         if curr_block and prev_block:
             can_merge, soup_prev, soup_curr = can_merge_tables(
-                page_prev, prev_block, page_curr, curr_block
+                page_prev,
+                prev_block,
+                page_curr,
+                curr_block,
+                soup_factory=soup_factory,
             )
         else:
             can_merge = False
 
         if can_merge:
-            merged_html = perform_table_merge(soup_prev, soup_curr)
+            merged_html = table_merger(soup_prev, soup_curr)
             prev_block.content = merged_html
             prev_block_global_id = prev_block.global_block_id
             curr_block.content = ""

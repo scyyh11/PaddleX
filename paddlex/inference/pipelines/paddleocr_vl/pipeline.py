@@ -233,9 +233,22 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     "(0 disables parallel CPU layout preparation)."
                 ) from exc
 
+            # Document-level post-processing for multi-page documents (opt-in via pipeline config,
+            # enabled for PaddleOCR-VL-1.8 when a model bundle is available).
+            self.use_doc_postprocess = config.get("use_doc_postprocess", False)
+            self.doc_postprocess_models_dir = config.get(
+                "doc_postprocess_models_dir", None
+            )
+            self.doc_postprocess_device = config.get("doc_postprocess_device", "cpu")
+            self._doc_postprocessor = None
+            self._doc_postprocess_warned = False
+
     def close(self):
         if hasattr(self, "vl_rec_model"):
             self.vl_rec_model.close()
+        if getattr(self, "_doc_postprocessor", None) is not None:
+            self._doc_postprocessor.close()
+            self._doc_postprocessor = None
 
     def get_model_settings(
         self,
@@ -1513,108 +1526,276 @@ class _PaddleOCRVLPipeline(BasePipeline):
         merge_tables: bool = True,
         relevel_titles: bool = True,
         concatenate_pages: bool = False,
+        use_doc_postprocess: Optional[bool] = None,
+        doc_name: Optional[str] = None,
     ):
         """Restructure layout parsing results from multiple pages.
+
         Args:
-            res_list: List of page parsing results
-            merge_tables: Whether to merge tables across pages
-            relevel_titles: Whether to relevel titles
-            concatenate_pages: Whether to concatenate pages to a single document
+            res_list: List of page parsing results.
+            merge_tables: Whether to merge tables across pages.
+            relevel_titles: Whether to relevel titles.
+            concatenate_pages: Whether to concatenate pages to a single document.
+            use_doc_postprocess: Override pipeline config for multi-page document
+                post-processing (``None`` uses pipeline config).
+            doc_name: Optional document name used when rendering/saving outputs.
 
-        Returns:
-            PaddleOCRVLResult: Combined OCR-VL result after merge_tables or relevel_titles policy
+        Yields:
+            PaddleOCRVLResult or DocPostprocessResult: Restructured results.
         """
+        res_list = list(res_list)
+        if not res_list:
+            return
 
-        if len(res_list) == 0:
-            return []
+        if (
+            len(res_list) > 1
+            and (merge_tables or relevel_titles)
+            and self._doc_postprocess_ready(use_doc_postprocess)
+        ):
+            document = self.postprocess_document(res_list, doc_name=doc_name)
+            if concatenate_pages:
+                yield document
+                return
+            yield from self._build_postprocessed_page_results(res_list, document)
+            return
 
-        def _get_img_obj(block, model_settings):
-            if block.get("image", None):
-                return block["image"]
-            if block["block_label"] in ("image", "seal") or (
-                block["block_label"] == "chart"
-                and not model_settings.get("use_chart_recognition", False)
-            ):
-                path = construct_img_path(block["block_label"], block["block_bbox"])
-                return {"path": path, "img": None}
-            return None
+        yield from _basic_restructure_pages(
+            res_list,
+            merge_tables=merge_tables,
+            relevel_titles=relevel_titles,
+            concatenate_pages=concatenate_pages,
+        )
 
-        def _conver_blocks_to_obj(blocks, model_settings):
-            res = []
-            for block in blocks:
-                obj = PaddleOCRVLBlock(
-                    label=block["block_label"],
-                    bbox=block["block_bbox"],
-                    polygon_points=block.get("block_polygon_points", None),
-                    quad=block.get("block_quad", None),
-                    content=re.sub(r"^#+\s", "", block["block_content"]),
-                    group_id=block.get("group_id", None),
+    def postprocess_document(
+        self,
+        res_list: list,
+        doc_name: Optional[str] = None,
+        images: Optional[list] = None,
+    ):
+        """Run document-level post-processing on the page results of one document."""
+        return self._get_doc_postprocessor().process(
+            res_list, doc_name=doc_name, images=images
+        )
+
+    def _get_doc_postprocessor(self):
+        if getattr(self, "_doc_postprocessor", None) is None:
+            from .doc_postprocess import DocPostprocessor
+
+            models_dir = getattr(self, "doc_postprocess_models_dir", None)
+            device = getattr(self, "doc_postprocess_device", "cpu")
+            self._doc_postprocessor = DocPostprocessor(
+                models_dir=models_dir, device=device
+            )
+        return self._doc_postprocessor
+
+    def _doc_postprocess_ready(self, requested: Optional[bool] = None) -> bool:
+        """Whether multi-page document post-processing should run."""
+        if requested is None:
+            requested = getattr(self, "use_doc_postprocess", False)
+        if requested is False:
+            return False
+        processor = self._get_doc_postprocessor()
+        if processor.available():
+            return True
+        if requested is True:
+            from .doc_postprocess.models import check
+
+            check(processor.models_dir)
+        if not getattr(self, "_doc_postprocess_warned", False):
+            logging.warning(
+                "Document post-processing models were not found in %s; "
+                "multi-page results fall back to basic PaddleX restructuring. "
+                "Set `doc_postprocess_models_dir` or PADDLEOCR_DOC_POSTPROCESS_MODELS "
+                "to enable it, or set `use_doc_postprocess=False` to silence this warning.",
+                processor.models_dir,
+            )
+            self._doc_postprocess_warned = True
+        return False
+
+    def _build_postprocessed_page_results(self, res_list, document):
+        """Convert post-processed document pages back into per-page PaddleOCRVLResult items."""
+        results = []
+        for original, page in zip(res_list, document["pages"]):
+            blocks = [dict(block) for block in page["parsing_res_list"]]
+            data = {
+                key: value for key, value in page.items() if key != "parsing_res_list"
+            }
+            data["parsing_res_list"] = blocks
+            result = next(
+                iter(
+                    _basic_restructure_pages(
+                        [{"res": data}],
+                        merge_tables=False,
+                        relevel_titles=False,
+                        concatenate_pages=False,
+                    )
                 )
-                if img := _get_img_obj(block, model_settings):
-                    obj.image = img
-                res.append(obj)
-            return res
+            )
+            images = _block_images(original)
+            for block, saved in zip(
+                result["parsing_res_list"], page["parsing_res_list"]
+            ):
+                block.content = saved["block_content"]
+                for key in ("global_block_id", "global_group_id", "title_level"):
+                    if key in saved:
+                        setattr(block, key, saved[key])
+                image = getattr(block, "image", None)
+                if isinstance(image, dict) and image.get("img") is None:
+                    block.image = (
+                        images.get((block.label, tuple(block.bbox)))
+                        or _page_region(original, block.bbox, image.get("path"))
+                        or image
+                    )
+            source = original
+            if not isinstance(original, BaseResult) and isinstance(original, dict):
+                source = original.get("res", original)
+            for key in (
+                "input_path",
+                "page_index",
+                "page_count",
+                "doc_preprocessor_res",
+                "layout_det_res",
+                "imgs_in_doc",
+                "spotting_res",
+                "table_res_list",
+            ):
+                if key in source:
+                    result[key] = source[key]
+            results.append(result)
+        return results
 
-        global_block_id = 0
-        obj_res_list = []
-        for one_page_res in res_list:
-            if not isinstance(one_page_res, BaseResult):
-                one_page_res = one_page_res["res"]
-                one_page_res["imgs_in_doc"] = []
-                blocks = one_page_res.get("parsing_res_list", [])
-                model_settings = one_page_res.get("model_settings", {})
-                blocks = _conver_blocks_to_obj(blocks, model_settings)
-            else:
-                blocks = one_page_res["parsing_res_list"]
-                model_settings = one_page_res.get("model_settings", {})
-            parsing_res_list = []
-            for block in blocks:
-                block.global_block_id = global_block_id
-                block.global_group_id = global_block_id
-                global_block_id += 1
-                parsing_res_list.append(block)
 
-            one_page_res["parsing_res_list"] = parsing_res_list
-            obj_res_list.append(one_page_res)
-        res_list = obj_res_list
+def _block_images(result):
+    """Collect {(label, bbox): image} from blocks that already hold an image array."""
+    images = {}
+    if isinstance(result, BaseResult) or (
+        isinstance(result, dict) and "parsing_res_list" in result
+    ):
+        for block in result.get("parsing_res_list") or []:
+            image = getattr(block, "image", None)
+            if isinstance(image, dict) and image.get("img") is not None:
+                images.setdefault((block.label, tuple(block.bbox)), image)
+    return images
 
-        blocks_by_page = [res["parsing_res_list"] for res in res_list]
 
-        if merge_tables:
-            blocks_by_page = merge_tables_across_pages(blocks_by_page)
-        if relevel_titles:
-            blocks_by_page = assign_levels_to_parsing_res(blocks_by_page)
+def _page_region(result, bbox, path):
+    """Crop a block region from ``doc_preprocessor_res['output_img']`` if available."""
+    try:
+        page = result["doc_preprocessor_res"]["output_img"]
+    except (KeyError, TypeError):
+        return None
+    if page is None or not path:
+        return None
 
-        concatenate_res = []
-        if concatenate_pages:
-            all_imgs_in_doc = []
-            for res in res_list:
-                all_imgs_in_doc.extend(res.get("imgs_in_doc", []))
-            res_list[0]["imgs_in_doc"] = all_imgs_in_doc
-            all_page_res = res_list[0]
-            all_blocks = []
-            for page_idx, blks in enumerate(blocks_by_page):
-                for blk in blks:
-                    blk.page_index = page_idx
-                    all_blocks.append(blk)
-            all_page_res["parsing_res_list"] = all_blocks
-            all_page_res["page_index"] = None
-            all_page_res["page_count"] = len(res_list)
-            if model_settings["use_layout_detection"]:
-                all_page_res["layout_det_res"] = [
-                    res["layout_det_res"] for res in res_list
-                ]
-            if model_settings["use_doc_preprocessor"]:
-                all_page_res["doc_preprocessor_res"] = [
-                    res["doc_preprocessor_res"] for res in res_list
-                ]
-            concatenate_res.append(PaddleOCRVLResult(all_page_res))
+    x1, y1, x2, y2 = (max(0, int(v)) for v in bbox)
+    region = page[y1:y2, x1:x2]
+    if not region.size:
+        return None
+    return {"path": path, "img": Image.fromarray(region[:, :, ::-1].copy())}
+
+
+def _basic_restructure_pages(
+    res_list: list,
+    merge_tables: bool = True,
+    relevel_titles: bool = True,
+    concatenate_pages: bool = False,
+    *,
+    soup_factory=None,
+    table_merger=None,
+):
+    """Standard heuristic multi-page restructuring (shared by fallback and doc post-processing)."""
+    if len(res_list) == 0:
+        return
+
+    def _get_img_obj(block, model_settings):
+        if block.get("image", None):
+            return block["image"]
+        if block["block_label"] in ("image", "seal") or (
+            block["block_label"] == "chart"
+            and not model_settings.get("use_chart_recognition", False)
+        ):
+            path = construct_img_path(block["block_label"], block["block_bbox"])
+            return {"path": path, "img": None}
+        return None
+
+    def _conver_blocks_to_obj(blocks, model_settings):
+        res = []
+        for block in blocks:
+            obj = PaddleOCRVLBlock(
+                label=block["block_label"],
+                bbox=block["block_bbox"],
+                polygon_points=block.get("block_polygon_points", None),
+                quad=block.get("block_quad", None),
+                content=re.sub(r"^#+\s", "", block["block_content"]),
+                group_id=block.get("group_id", None),
+            )
+            if img := _get_img_obj(block, model_settings):
+                obj.image = img
+            res.append(obj)
+        return res
+
+    global_block_id = 0
+    obj_res_list = []
+    for one_page_res in res_list:
+        if not isinstance(one_page_res, BaseResult):
+            one_page_res = one_page_res["res"]
+            one_page_res["imgs_in_doc"] = []
+            blocks = one_page_res.get("parsing_res_list", [])
+            model_settings = one_page_res.get("model_settings", {})
+            blocks = _conver_blocks_to_obj(blocks, model_settings)
         else:
-            for page_idx, one_page_res in enumerate(res_list):
-                one_page_res["parsing_res_list"] = blocks_by_page[page_idx]
-                concatenate_res.append(PaddleOCRVLResult(one_page_res))
+            blocks = one_page_res["parsing_res_list"]
+            model_settings = one_page_res.get("model_settings", {})
+        parsing_res_list = []
+        for block in blocks:
+            block.global_block_id = global_block_id
+            block.global_group_id = global_block_id
+            global_block_id += 1
+            parsing_res_list.append(block)
 
-        yield from concatenate_res
+        one_page_res["parsing_res_list"] = parsing_res_list
+        obj_res_list.append(one_page_res)
+    res_list = obj_res_list
+
+    blocks_by_page = [res["parsing_res_list"] for res in res_list]
+
+    if merge_tables:
+        blocks_by_page = merge_tables_across_pages(
+            blocks_by_page,
+            soup_factory=soup_factory,
+            table_merger=table_merger,
+        )
+    if relevel_titles:
+        blocks_by_page = assign_levels_to_parsing_res(blocks_by_page)
+
+    concatenate_res = []
+    if concatenate_pages:
+        all_imgs_in_doc = []
+        for res in res_list:
+            all_imgs_in_doc.extend(res.get("imgs_in_doc", []))
+        res_list[0]["imgs_in_doc"] = all_imgs_in_doc
+        all_page_res = res_list[0]
+        all_blocks = []
+        for page_idx, blks in enumerate(blocks_by_page):
+            for blk in blks:
+                blk.page_index = page_idx
+                all_blocks.append(blk)
+        all_page_res["parsing_res_list"] = all_blocks
+        all_page_res["page_index"] = None
+        all_page_res["page_count"] = len(res_list)
+        if model_settings.get("use_layout_detection"):
+            all_page_res["layout_det_res"] = [res["layout_det_res"] for res in res_list]
+        if model_settings.get("use_doc_preprocessor"):
+            all_page_res["doc_preprocessor_res"] = [
+                res["doc_preprocessor_res"] for res in res_list
+            ]
+        concatenate_res.append(PaddleOCRVLResult(all_page_res))
+    else:
+        for page_idx, one_page_res in enumerate(res_list):
+            one_page_res["parsing_res_list"] = blocks_by_page[page_idx]
+            concatenate_res.append(PaddleOCRVLResult(one_page_res))
+
+    yield from concatenate_res
 
 
 class _BasePaddleOCRVLPipeline(AutoParallelImageSimpleInferencePipeline):
