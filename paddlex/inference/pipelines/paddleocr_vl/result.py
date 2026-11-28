@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 
 import numpy as np
@@ -57,6 +58,7 @@ SKIP_ORDER_LABELS = [
     "footnote",
     "aside_text",
 ]
+_OCR_ONLY_LABEL = "__doc_postprocess_ocr_only__"
 
 if is_dep_available("opencv-contrib-python"):
     import cv2
@@ -484,12 +486,63 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
 
         handle_funcs_dict = self._build_handle_funcs_dict(pretty=pretty)
 
+        ms = self["model_settings"]
+        use_ocr_for_image_block = ms.get("use_ocr_for_image_block", False)
+        use_seal_recognition = ms.get("use_seal_recognition", False)
+        use_chart_recognition = ms.get("use_chart_recognition", False)
+        use_layout_detection = ms.get("use_layout_detection", False)
+        dropped_paths = set(getattr(self, "_dropped_markdown_image_paths", ()))
+        kept_paths = set()
+
+        blocks = []
+        for block in self["parsing_res_list"]:
+            if getattr(block, "_drop_image_in_markdown", False):
+                if isinstance(block.image, dict) and block.image.get("path"):
+                    dropped_paths.add(block.image["path"])
+                show_ocr = (
+                    (block.label == "image" and use_ocr_for_image_block)
+                    or (
+                        block.label == "chart"
+                        and not use_chart_recognition
+                        and use_ocr_for_image_block
+                    )
+                    or (
+                        block.label == "seal"
+                        and use_layout_detection
+                        and use_seal_recognition
+                    )
+                )
+                if (
+                    block.label in handle_funcs_dict
+                    and show_ocr
+                    and block.content
+                    and block.content.strip()
+                ):
+                    text_block = copy.copy(block)
+                    text_block.image = None
+                    text_block.label = _OCR_ONLY_LABEL
+                    handle_funcs_dict[_OCR_ONLY_LABEL] = format_text_plain
+                    blocks.append(text_block)
+                continue
+            if isinstance(getattr(block, "image", None), dict) and block.image.get(
+                "path"
+            ):
+                kept_paths.add(block.image["path"])
+            blocks.append(block)
+
         result = MarkdownConverter.convert(
-            self["parsing_res_list"],
+            blocks,
             handle_funcs_dict=handle_funcs_dict,
             show_formula_number=show_formula_number,
             imgs_in_doc=self["imgs_in_doc"],
         )
+        if (
+            markdown_postprocess := getattr(self, "_markdown_postprocess", None)
+        ) is not None:
+            result["markdown_texts"] = markdown_postprocess(result["markdown_texts"])
+        for path in dropped_paths - kept_paths:
+            if path not in result["markdown_texts"]:
+                result["markdown_images"].pop(path, None)
         result["page_index"] = self["page_index"]
         result["input_path"] = self["input_path"]
         return result

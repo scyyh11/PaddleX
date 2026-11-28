@@ -17,6 +17,11 @@ use_chart_recognition: False
 use_seal_recognition: False
 format_block_content: False
 merge_layout_blocks: True
+# Multi-page document post-processing: null auto-enables when model bundle is present;
+# set true to require models or false to disable.
+use_doc_postprocess: null
+doc_postprocess_models_dir: null
+doc_postprocess_device: "cpu"
 markdown_ignore_labels:
   - number
   - footnote

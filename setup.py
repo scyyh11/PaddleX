@@ -241,6 +241,10 @@ EXTRAS = {
         "paddle2onnx": [
             "paddle2onnx == 2.0.2rc3",
         ],
+        "doc-postprocess": [
+            "joblib",
+            "lightgbm",
+        ],
         "serving": [
             "aiohttp >= 3.9",
             "bce-python-sdk >= 0.9",

@@ -39,6 +39,23 @@ if is_dep_available("fastapi"):
     from fastapi import FastAPI
 
 
+def _restructure_pages_sync(pipeline: Any, *args: Any, **kwargs: Any) -> List[Any]:
+    return list(pipeline.restructure_pages(*args, **kwargs))
+
+
+def _filter_markdown_images(images_map: Any, res_obj: Any, md_text: str = "") -> Any:
+    if not images_map:
+        return images_map
+    dropped = getattr(res_obj, "_dropped_markdown_image_paths", None)
+    if not dropped:
+        return images_map
+    return {
+        k: v
+        for k, v in images_map.items()
+        if k not in dropped or (md_text and k in md_text)
+    }
+
+
 @function_requires_deps("fastapi")
 def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
     app, ctx = create_app(
@@ -97,13 +114,13 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
 
         if request.restructurePages:
             result = await serving_utils.call_async(
-                pipeline.pipeline.restructure_pages,
+                _restructure_pages_sync,
+                pipeline.pipeline,
                 result,
                 merge_tables=request.mergeTables,
                 relevel_titles=request.relevelTitles,
                 concatenate_pages=False,
             )
-            result = list(result)
 
         layout_parsing_results: List[Dict[str, Any]] = []
         for i, (img, item) in enumerate(zip(images, result)):
@@ -203,13 +220,13 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
                 markdown_images.update(page.markdownImages)
 
         restructured_results = await serving_utils.call_async(
-            pipeline.pipeline.restructure_pages,
+            _restructure_pages_sync,
+            pipeline.pipeline,
             original_results,
             merge_tables=request.mergeTables,
             relevel_titles=request.relevelTitles,
             concatenate_pages=request.concatenatePages,
         )
-        restructured_results = list(restructured_results)
 
         layout_parsing_results = []
         if request.concatenatePages:
@@ -224,7 +241,15 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
             )
             layout_parsing_result["markdown"] = dict(
                 text=md_data["markdown_texts"],
-                images=markdown_images if request.returnMarkdownImages else None,
+                images=(
+                    _filter_markdown_images(
+                        markdown_images,
+                        restructured_results[0],
+                        md_data["markdown_texts"],
+                    )
+                    if request.returnMarkdownImages
+                    else None
+                ),
             )
             if normalize_output_formats(request.outputFormats):
                 res_obj = restructured_results[0]
@@ -253,7 +278,11 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
                 layout_parsing_result["markdown"] = dict(
                     text=md_data["markdown_texts"],
                     images=(
-                        old_page.markdownImages
+                        _filter_markdown_images(
+                            old_page.markdownImages,
+                            new_res,
+                            md_data["markdown_texts"],
+                        )
                         if request.returnMarkdownImages
                         else None
                     ),
