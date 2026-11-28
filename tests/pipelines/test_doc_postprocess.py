@@ -14,8 +14,11 @@
 
 """Unit and integration tests for multi-page document post-processing in PaddleOCR-VL-1.8."""
 
+import ast
+import asyncio
 import concurrent.futures
 import difflib
+import functools
 import gc
 import importlib
 import json
@@ -23,6 +26,7 @@ import math
 import os
 import random
 import sys
+import threading
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,6 +62,8 @@ from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.engine import (
     unified,
 )
 from paddlex.inference.pipelines.paddleocr_vl.pipeline import _PaddleOCRVLPipeline
+from paddlex.inference.pipelines.paddleocr_vl.result import PaddleOCRVLResult
+from paddlex.utils.deps import is_serving_plugin_available
 
 
 class _FakeBooster:
@@ -731,10 +737,47 @@ class TestPaddleOCRVLIntegration:
             )
         )
         assert len(concat) == 1
-        assert isinstance(concat[0], DocPostprocessResult)
-        assert concat[0]["markdown_text"] == "# Title A\n\n## Title B\n"
-        assert concat[0].markdown["markdown_texts"] == "# Title A\n\n## Title B\n"
-        concat[0].save_all(tmp_path / "out")
+        assert isinstance(concat[0], PaddleOCRVLResult)
+        assert [
+            b["block_content"] for b in concat[0].json["res"]["parsing_res_list"]
+        ] == [
+            "Title A",
+            "Title B",
+        ]
+        md_data = concat[0]._to_markdown(pretty=True, show_formula_number=False)
+        assert "Title A" in md_data["markdown_texts"]
+        assert "Title B" in md_data["markdown_texts"]
+        docx_dir = tmp_path / "docx_out"
+        concat[0].save_to_word(docx_dir)
+        docx_path = docx_dir / f"{Path(concat[0]._get_input_fn()).stem}.docx"
+        assert docx_path.is_file()
+        assert docx_path.read_bytes()[:2] == b"PK"
+
+        if is_serving_plugin_available():
+            from paddlex.inference.serving.app_shared.document_export import (
+                docx_bytes_and_filename_from_word_mixin,
+                refill_paddleocr_vl_images_from_markdown,
+            )
+            from paddlex.inference.serving.basic_serving._pipeline_apps._common import (
+                common,
+            )
+
+            pruned = common.prune_result(concat[0].json["res"])
+            assert len(pruned["parsing_res_list"]) == 2
+            refill_paddleocr_vl_images_from_markdown(concat[0], {})
+            docx_bytes, filename = docx_bytes_and_filename_from_word_mixin(concat[0])
+            assert filename == "doc.docx"
+            assert docx_bytes[:2] == b"PK"
+
+        direct_doc = pipeline.postprocess_document(
+            [
+                self._dummy_page_res(0, "Title A"),
+                self._dummy_page_res(1, "Title B"),
+            ]
+        )
+        assert isinstance(direct_doc, DocPostprocessResult)
+        assert direct_doc["markdown_text"] == "# Title A\n\n## Title B\n"
+        direct_doc.save_all(tmp_path / "out")
         assert (tmp_path / "out" / "doc.md").is_file()
         assert (tmp_path / "out" / "doc.json").is_file()
 
@@ -750,3 +793,438 @@ class TestPaddleOCRVLIntegration:
         assert len(per_page) == 2
         assert per_page[0]["parsing_res_list"][0].label == "doc_title"
         assert per_page[1]["parsing_res_list"][0].title_level == 1
+
+    def test_restructure_pages_concatenate_serving_and_docx_export(self, tmp_path):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        pages = [
+            self._dummy_page_res(0, "Section 1"),
+            self._dummy_page_res(1, "1.1 Subsection"),
+        ]
+        try:
+            out = list(pipeline.restructure_pages(pages, concatenate_pages=True))
+            assert len(out) == 1
+            res = out[0]
+            assert isinstance(res, PaddleOCRVLResult)
+            res_json = res.json["res"]
+            assert res_json["page_count"] == 2
+            assert len(res_json["parsing_res_list"]) == 2
+            md_data = res._to_markdown(pretty=True, show_formula_number=False)
+            assert "Section 1" in md_data["markdown_texts"]
+            assert "1.1 Subsection" in md_data["markdown_texts"]
+            docx_dir = tmp_path / "docx_e2e"
+            res.save_to_word(docx_dir)
+            docx_path = docx_dir / f"{Path(res._get_input_fn()).stem}.docx"
+            assert docx_path.is_file()
+            assert docx_path.read_bytes()[:2] == b"PK"
+
+            if is_serving_plugin_available():
+                from paddlex.inference.serving.app_shared.document_export import (
+                    docx_bytes_and_filename_from_word_mixin,
+                )
+                from paddlex.inference.serving.basic_serving._pipeline_apps._common import (
+                    common,
+                )
+
+                pruned = common.prune_result(res_json)
+                assert len(pruned["parsing_res_list"]) == 2
+                docx_bytes, filename = docx_bytes_and_filename_from_word_mixin(res)
+                assert filename == "doc.docx"
+                assert docx_bytes[:2] == b"PK"
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_restructure_pages_respects_independent_merge_tables_and_relevel_titles(
+        self, tmp_path
+    ):
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(tmp_path)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocess_warned = False
+        called = False
+
+        def fail_if_called(*args, **kwargs):
+            nonlocal called
+            called = True
+            raise AssertionError("postprocess_document should not run")
+
+        pipeline._doc_postprocessor = SimpleNamespace(
+            models_dir=tmp_path,
+            available=lambda: True,
+            process=fail_if_called,
+            close=lambda: None,
+        )
+
+        def make_table_pages():
+            return [
+                {
+                    "res": {
+                        "input_path": "doc.pdf",
+                        "page_index": 0,
+                        "page_count": 2,
+                        "width": 500,
+                        "height": 600,
+                        "model_settings": {
+                            "use_doc_preprocessor": False,
+                            "use_layout_detection": False,
+                            "use_chart_recognition": False,
+                        },
+                        "parsing_res_list": [
+                            {
+                                "block_label": "paragraph_title",
+                                "block_content": "Chapter 1 Overview",
+                                "block_bbox": [20, 30, 300, 60],
+                            },
+                            {
+                                "block_label": "table",
+                                "block_content": "<table><tr><th>A</th><th>B</th></tr><tr><td>1</td><td>2</td></tr></table>",
+                                "block_bbox": [20, 100, 480, 500],
+                            },
+                        ],
+                    }
+                },
+                {
+                    "res": {
+                        "input_path": "doc.pdf",
+                        "page_index": 1,
+                        "page_count": 2,
+                        "width": 500,
+                        "height": 600,
+                        "model_settings": {
+                            "use_doc_preprocessor": False,
+                            "use_layout_detection": False,
+                            "use_chart_recognition": False,
+                        },
+                        "parsing_res_list": [
+                            {
+                                "block_label": "table",
+                                "block_content": "<table><tr><th>A</th><th>B</th></tr><tr><td>3</td><td>4</td></tr></table>",
+                                "block_bbox": [20, 50, 480, 250],
+                            },
+                            {
+                                "block_label": "paragraph_title",
+                                "block_content": "1.1 Details",
+                                "block_bbox": [20, 300, 260, 330],
+                            },
+                        ],
+                    }
+                },
+            ]
+
+        no_merge = list(
+            pipeline.restructure_pages(
+                make_table_pages(),
+                merge_tables=False,
+                relevel_titles=True,
+                concatenate_pages=False,
+            )
+        )
+        assert not called
+        assert (
+            "<table><tr><th>A</th><th>B</th></tr><tr><td>3</td><td>4</td></tr></table>"
+            in (no_merge[1]["parsing_res_list"][0].content)
+        )
+
+        no_relevel = list(
+            pipeline.restructure_pages(
+                make_table_pages(),
+                merge_tables=True,
+                relevel_titles=False,
+                concatenate_pages=False,
+            )
+        )
+        assert not called
+        assert not hasattr(no_relevel[0]["parsing_res_list"][0], "title_level")
+        assert no_relevel[1]["parsing_res_list"][0].content == ""
+
+    def test_serving_restructure_pages_runs_generator_off_event_loop(self):
+        app_path = (
+            Path(__file__).resolve().parents[2]
+            / "paddlex"
+            / "inference"
+            / "serving"
+            / "basic_serving"
+            / "_pipeline_apps"
+            / "paddleocr_vl.py"
+        )
+        tree = ast.parse(app_path.read_text(encoding="utf-8"))
+
+        # Verify both _infer and _restructure_pages consume restructure_pages inside call_async.
+        call_async_targets = []
+        for node in ast.walk(tree):
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "call_async"
+                and node.args
+                and isinstance(node.args[0], ast.Name)
+            ):
+                call_async_targets.append(node.args[0].id)
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "restructure_pages"
+            ):
+                # Only _restructure_pages_sync should call pipeline.restructure_pages
+                pass
+        assert call_async_targets.count("_restructure_pages_sync") == 2
+
+        fn_node = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_restructure_pages_sync"
+        )
+        mod = ast.Module(body=[fn_node], type_ignores=[])
+        ns = {"Any": object, "List": list}
+        exec(compile(mod, str(app_path), "exec"), ns)
+        sync_fn = ns["_restructure_pages_sync"]
+
+        loop_thread = None
+        gen_thread = None
+
+        class _FakePipeline:
+            def restructure_pages(self, res_list, **kwargs):
+                nonlocal gen_thread
+                gen_thread = threading.get_ident()
+                yield res_list[0]
+
+        async def run():
+            nonlocal loop_thread
+            loop_thread = threading.get_ident()
+            return await asyncio.get_running_loop().run_in_executor(
+                None,
+                functools.partial(
+                    sync_fn,
+                    _FakePipeline(),
+                    ["ok"],
+                    merge_tables=True,
+                    relevel_titles=True,
+                    concatenate_pages=True,
+                ),
+            )
+
+        res = asyncio.run(run())
+        assert res == ["ok"]
+        assert gen_thread is not None
+        assert gen_thread != loop_thread
+
+        if is_serving_plugin_available():
+            from paddlex.inference.serving.basic_serving._pipeline_apps import (
+                paddleocr_vl as vl_serving,
+            )
+            from paddlex.inference.serving.infra import utils as serving_utils
+
+            gen_thread = None
+
+            async def run_serving():
+                nonlocal loop_thread
+                loop_thread = threading.get_ident()
+                return await serving_utils.call_async(
+                    vl_serving._restructure_pages_sync,
+                    _FakePipeline(),
+                    ["ok"],
+                    merge_tables=True,
+                    relevel_titles=True,
+                    concatenate_pages=True,
+                )
+
+            assert asyncio.run(run_serving()) == ["ok"]
+            assert gen_thread is not None and gen_thread != loop_thread
+
+    def test_per_page_json_preserves_geometry_and_group_id(self, tmp_path):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        poly0 = [[20, 30], [300, 30], [300, 60], [20, 60]]
+        quad0 = [20, 30, 300, 30, 300, 60, 20, 60]
+        poly1 = [[20, 80], [320, 80], [320, 120], [20, 120]]
+        quad1 = [20, 80, 320, 80, 320, 120, 20, 120]
+        pages = [
+            {
+                "res": {
+                    "input_path": "doc.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "paragraph_title",
+                            "block_content": "Chapter 1",
+                            "block_bbox": [20, 30, 300, 60],
+                            "block_polygon_points": poly0,
+                            "block_quad": quad0,
+                            "group_id": 17,
+                        }
+                    ],
+                }
+            },
+            {
+                "res": {
+                    "input_path": "doc.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "Body paragraph content.",
+                            "block_bbox": [20, 80, 320, 120],
+                            "block_polygon_points": poly1,
+                            "block_quad": quad1,
+                            "group_id": 29,
+                        }
+                    ],
+                }
+            },
+        ]
+        try:
+            per_page = list(pipeline.restructure_pages(pages, concatenate_pages=False))
+            assert len(per_page) == 2
+            blk0 = per_page[0].json["res"]["parsing_res_list"][0]
+            blk1 = per_page[1].json["res"]["parsing_res_list"][0]
+            assert blk0["block_polygon_points"] == poly0
+            assert blk0["block_quad"] == quad0
+            assert blk0["group_id"] == 17
+            assert blk1["block_polygon_points"] == poly1
+            assert blk1["block_quad"] == quad1
+            assert blk1["group_id"] == 29
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_models_problems_rejects_partial_heading_final_bundle(self, tmp_path):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "partial_bundle")
+        assert models.problems(dst) == []
+
+        # Rename only headings to `final` while leaving parents/spans/graph at fold-0
+        (dst / "headings" / "fold-0.safetensors").rename(
+            dst / "headings" / "fold-final.safetensors"
+        )
+        (dst / "headings" / "fold-0.json").rename(dst / "headings" / "fold-final.json")
+        issues = models.problems(dst)
+        assert issues == ["headings/fold-0(.safetensors|.joblib)"]
+        with pytest.raises(ModelBundleError):
+            models.check(dst)
+
+        # Providing `final` across all 4 heading families satisfies validation again
+        for family, stem in (
+            ("parents", "parent-fold"),
+            ("spans", "span-fold"),
+            ("graph", "graph-fold"),
+        ):
+            (dst / family / f"{stem}-0.safetensors").rename(
+                dst / family / f"{stem}-final.safetensors"
+            )
+            (dst / family / f"{stem}-0.json").rename(
+                dst / family / f"{stem}-final.json"
+            )
+        assert models.problems(dst) == []
+
+    def test_empty_tables_across_pages_do_not_raise_index_error(self, tmp_path):
+        def make_empty_table_pages():
+            b1 = SimpleNamespace(
+                label="table",
+                bbox=[10, 100, 490, 500],
+                content="<table></table>",
+                global_block_id=0,
+                global_group_id=0,
+            )
+            b2 = SimpleNamespace(
+                label="table",
+                bbox=[10, 50, 490, 300],
+                content="<table></table>",
+                global_block_id=1,
+                global_group_id=1,
+            )
+            return [[b1], [b2]]
+
+        tok = table_merge_bridge.html_cache.set({})
+        try:
+            merged = merge_table.merge_tables_across_pages(
+                make_empty_table_pages(),
+                soup_factory=table_merge_bridge.readonly_soup_factory,
+                table_merger=table_merge_bridge.cached_table_merger,
+            )
+        finally:
+            table_merge_bridge.html_cache.reset(tok)
+        assert merged[0][0].content == "<table></table>"
+        assert merged[1][0].content == ""
+
+        # Also cover BS4 fallback and empty previous + non-empty current table
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pages = [
+            {
+                "input_path": "empty_tables.pdf",
+                "page_index": 0,
+                "page_count": 2,
+                "width": 500,
+                "height": 600,
+                "model_settings": {
+                    "use_doc_preprocessor": False,
+                    "use_layout_detection": False,
+                    "use_chart_recognition": False,
+                },
+                "parsing_res_list": [
+                    {
+                        "block_label": "table",
+                        "block_content": "<table></table>",
+                        "block_bbox": [20, 100, 480, 500],
+                    }
+                ],
+            },
+            {
+                "input_path": "empty_tables.pdf",
+                "page_index": 1,
+                "page_count": 2,
+                "width": 500,
+                "height": 600,
+                "model_settings": {
+                    "use_doc_preprocessor": False,
+                    "use_layout_detection": False,
+                    "use_chart_recognition": False,
+                },
+                "parsing_res_list": [
+                    {
+                        "block_label": "table",
+                        "block_content": "<table></table>",
+                        "block_bbox": [20, 50, 480, 300],
+                    }
+                ],
+            },
+        ]
+        processor = DocPostprocessor(models_dir=dst, device="cpu", num_threads=1)
+        try:
+            doc = processor.process(pages, images=[None, None])
+            assert isinstance(doc, DocPostprocessResult)
+            assert doc["page_count"] == 2
+        finally:
+            processor.close()

@@ -15,7 +15,12 @@ from paddlex import create_pipeline
 
 pipeline = create_pipeline("PaddleOCR-VL-1.8")
 pages = list(pipeline.predict("report.pdf"))
-doc = next(pipeline.restructure_pages(pages, concatenate_pages=True))
+# Standard PaddleOCRVLResult (compatible with serving and DOCX export):
+res = next(pipeline.restructure_pages(pages, concatenate_pages=True))
+res.save_to_markdown("output")
+
+# Direct DocPostprocessResult (includes timings and intermediate events):
+doc = pipeline.pipeline.postprocess_document(pages)
 doc.save_to_markdown("output")
 ```
 

@@ -1073,6 +1073,12 @@ def process_in_memory(name, pages, visual_features):
                 "block_content": b.content,
                 "block_bbox": list(b.bbox),
             }
+            if getattr(b, "polygon_points", None) is not None:
+                d["block_polygon_points"] = b.polygon_points
+            if getattr(b, "quad", None) is not None:
+                d["block_quad"] = b.quad
+            if getattr(b, "group_id", None) is not None:
+                d["group_id"] = b.group_id
             for field in ["global_block_id", "global_group_id", "title_level"]:
                 if hasattr(b, field):
                     d[field] = getattr(b, field)

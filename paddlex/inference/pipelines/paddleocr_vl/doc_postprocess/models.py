@@ -29,6 +29,8 @@ DEFAULT_DIR = (
 )
 
 # family directory -> (model file stem pattern, auxiliary files required)
+HEADING_FAMILIES = ("headings", "parents", "spans", "graph")
+
 FAMILIES = {
     "headings": ("fold-{}", ()),
     "parents": ("parent-fold-{}", ()),
@@ -78,11 +80,26 @@ def problems(root):
         return [f"model directory {root} does not exist"]
     fold = read_bundle(root)["default_fold"]
     missing = []
-    for family, (stem_pattern, required) in FAMILIES.items():
+    for family, (_, required) in FAMILIES.items():
         directory = root / family
         for name in required:
             if not (directory / name).is_file():
                 missing.append(f"{family}/{name}")
+    # Runtime routes headings jointly: `final` is used only when all heading families have it.
+    all_heading_final = all(
+        _has_model_stem(root / family, FAMILIES[family][0].format("final"))
+        for family in HEADING_FAMILIES
+    )
+    if not all_heading_final:
+        for family in HEADING_FAMILIES:
+            stem = FAMILIES[family][0].format(fold)
+            if not _has_model_stem(root / family, stem):
+                missing.append(f"{family}/{stem}(.safetensors|.joblib)")
+    for family in FAMILIES:
+        if family in HEADING_FAMILIES:
+            continue
+        stem_pattern = FAMILIES[family][0]
+        directory = root / family
         candidates = [stem_pattern.format("final"), stem_pattern.format(fold)]
         if not any(_has_model_stem(directory, stem) for stem in candidates):
             missing.append(f"{family}/{candidates[1]}(.safetensors|.joblib)")

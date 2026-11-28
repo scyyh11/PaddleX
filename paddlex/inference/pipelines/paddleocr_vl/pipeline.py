@@ -1541,7 +1541,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
             doc_name: Optional document name used when rendering/saving outputs.
 
         Yields:
-            PaddleOCRVLResult or DocPostprocessResult: Restructured results.
+            PaddleOCRVLResult: Restructured results.
         """
         res_list = list(res_list)
         if not res_list:
@@ -1549,14 +1549,16 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
         if (
             len(res_list) > 1
-            and (merge_tables or relevel_titles)
+            and merge_tables
+            and relevel_titles
             and self._doc_postprocess_ready(use_doc_postprocess)
         ):
             document = self.postprocess_document(res_list, doc_name=doc_name)
+            page_results = self._build_postprocessed_page_results(res_list, document)
             if concatenate_pages:
-                yield document
+                yield _concatenate_page_results(page_results)
                 return
-            yield from self._build_postprocessed_page_results(res_list, document)
+            yield from page_results
             return
 
         yield from _basic_restructure_pages(
@@ -1661,8 +1663,37 @@ class _PaddleOCRVLPipeline(BasePipeline):
             ):
                 if key in source:
                     result[key] = source[key]
+            result.setdefault("page_count", len(res_list))
             results.append(result)
         return results
+
+
+def _concatenate_page_results(page_results):
+    """Merge per-page ``PaddleOCRVLResult`` items into one concatenated result."""
+    all_page_res = dict(page_results[0])
+    all_imgs_in_doc = []
+    all_blocks = []
+    for page_idx, res in enumerate(page_results):
+        all_imgs_in_doc.extend(res.get("imgs_in_doc", []))
+        for blk in res.get("parsing_res_list", []):
+            blk.page_index = page_idx
+            all_blocks.append(blk)
+    all_page_res["imgs_in_doc"] = all_imgs_in_doc
+    all_page_res["parsing_res_list"] = all_blocks
+    all_page_res["page_index"] = None
+    all_page_res["page_count"] = len(page_results)
+    model_settings = all_page_res.get("model_settings") or {}
+    if model_settings.get("use_layout_detection") and all(
+        "layout_det_res" in res for res in page_results
+    ):
+        all_page_res["layout_det_res"] = [res["layout_det_res"] for res in page_results]
+    if model_settings.get("use_doc_preprocessor") and all(
+        "doc_preprocessor_res" in res for res in page_results
+    ):
+        all_page_res["doc_preprocessor_res"] = [
+            res["doc_preprocessor_res"] for res in page_results
+        ]
+    return PaddleOCRVLResult(all_page_res)
 
 
 def _block_images(result):

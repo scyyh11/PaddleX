@@ -228,12 +228,44 @@ def append_rows(previous, current, skip=0):
 
         a = BeautifulSoup(str(previous), "html.parser")
         b = BeautifulSoup(str(current), "html.parser")
+        addition = b.find_all("tr")[skip:]
+        if not addition:
+            return a
         rows = a.find_all("tr")
-        for row in b.find_all("tr")[skip:]:
-            rows[-1].parent.append(row.extract())
+        parent = rows[-1].parent if rows else (a.find("tbody") or a.find("table") or a)
+        for row in addition:
+            parent.append(row.extract())
         return a
-    target = previous.find_all("tr")[-1]
     addition = current.find_all("tr")[skip:]
+    if not addition:
+        return previous
+    prev_rows = previous.find_all("tr")
+    if not prev_rows:
+        containers = previous.find_all("tbody") or previous.find_all("table")
+        if not containers:
+            return previous
+        target = containers[-1]
+
+        def append_into(node):
+            if node is target:
+                result = Node(node.name)
+                result.attrs = node.attrs
+                result.children = node.children + addition
+                return result, True
+            for i, child in enumerate(node.children):
+                if isinstance(child, Node):
+                    replacement, changed = append_into(child)
+                    if changed:
+                        result = Node(node.name)
+                        result.attrs = node.attrs
+                        result.children = (
+                            node.children[:i] + [replacement] + node.children[i + 1 :]
+                        )
+                        return result, True
+            return node, False
+
+        return append_into(previous)[0]
+    target = prev_rows[-1]
 
     def replace(node):
         if target in node.children:
