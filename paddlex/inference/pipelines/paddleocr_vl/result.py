@@ -58,6 +58,7 @@ SKIP_ORDER_LABELS = [
     "footnote",
     "aside_text",
 ]
+_OCR_ONLY_LABEL = "__doc_postprocess_ocr_only__"
 
 if is_dep_available("opencv-contrib-python"):
     import cv2
@@ -491,6 +492,7 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
         use_chart_recognition = ms.get("use_chart_recognition", False)
         use_layout_detection = ms.get("use_layout_detection", False)
         dropped_paths = set(getattr(self, "_dropped_markdown_image_paths", ()))
+        kept_paths = set()
 
         blocks = []
         for block in self["parsing_res_list"]:
@@ -510,12 +512,22 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
                         and use_seal_recognition
                     )
                 )
-                if show_ocr and block.content and block.content.strip():
+                if (
+                    block.label in handle_funcs_dict
+                    and show_ocr
+                    and block.content
+                    and block.content.strip()
+                ):
                     text_block = copy.copy(block)
                     text_block.image = None
-                    text_block.label = "text"
+                    text_block.label = _OCR_ONLY_LABEL
+                    handle_funcs_dict[_OCR_ONLY_LABEL] = format_text_plain
                     blocks.append(text_block)
                 continue
+            if isinstance(getattr(block, "image", None), dict) and block.image.get(
+                "path"
+            ):
+                kept_paths.add(block.image["path"])
             blocks.append(block)
 
         result = MarkdownConverter.convert(
@@ -524,7 +536,7 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
             show_formula_number=show_formula_number,
             imgs_in_doc=self["imgs_in_doc"],
         )
-        for path in dropped_paths:
+        for path in dropped_paths - kept_paths:
             result["markdown_images"].pop(path, None)
         if (
             markdown_postprocess := getattr(self, "_markdown_postprocess", None)

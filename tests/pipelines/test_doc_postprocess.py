@@ -27,6 +27,7 @@ import os
 import random
 import sys
 import threading
+import zipfile
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -1484,6 +1485,76 @@ class TestPaddleOCRVLIntegration:
                     assert "50_200_350_450" in md["markdown_texts"]
                     assert sliver_path not in md["markdown_images"]
                     assert keep_path in md["markdown_images"]
+
+            # Even when markdown_ignore_labels=["text"], preserved OCR on noise images remains visible.
+            ignore_sliver = PaddleOCRVLBlock("image", [10, 10, 400, 20], "REF C4801")
+            ignore_sliver.image = {
+                "path": sliver_path,
+                "img": Image.new("RGB", (390, 10), "white"),
+            }
+            ignore_pages = [
+                PaddleOCRVLResult(
+                    {
+                        "input_path": "ocr_noise_ignore.pdf",
+                        "page_index": 0,
+                        "page_count": 2,
+                        "width": 500,
+                        "height": 600,
+                        "doc_preprocessor_res": {"output_img": canvas},
+                        "imgs_in_doc": [
+                            {"path": sliver_path, "img": ignore_sliver.image["img"]}
+                        ],
+                        "model_settings": {
+                            "use_doc_preprocessor": False,
+                            "use_layout_detection": False,
+                            "use_chart_recognition": False,
+                            "use_ocr_for_image_block": True,
+                            "markdown_ignore_labels": ["text"],
+                        },
+                        "parsing_res_list": [
+                            ignore_sliver,
+                            PaddleOCRVLBlock(
+                                "text", [40, 80, 320, 110], "Ignored body."
+                            ),
+                        ],
+                    }
+                ),
+                PaddleOCRVLResult(
+                    {
+                        "input_path": "ocr_noise_ignore.pdf",
+                        "page_index": 1,
+                        "page_count": 2,
+                        "width": 500,
+                        "height": 600,
+                        "doc_preprocessor_res": {"output_img": canvas},
+                        "imgs_in_doc": [],
+                        "model_settings": {
+                            "use_doc_preprocessor": False,
+                            "use_layout_detection": False,
+                            "use_chart_recognition": False,
+                            "use_ocr_for_image_block": True,
+                            "markdown_ignore_labels": ["text"],
+                        },
+                        "parsing_res_list": [
+                            PaddleOCRVLBlock(
+                                "text", [40, 80, 320, 110], "Ignored body 2."
+                            )
+                        ],
+                    }
+                ),
+            ]
+            for concat_flag in (True, False):
+                ignore_results = list(
+                    pipeline.restructure_pages(
+                        ignore_pages, concatenate_pages=concat_flag
+                    )
+                )
+                for pretty_flag in (True, False):
+                    ignore_md = ignore_results[0]._to_markdown(pretty=pretty_flag)
+                    assert "REF C4801" in ignore_md["markdown_texts"]
+                    assert "Ignored body." not in ignore_md["markdown_texts"]
+                    assert "10_10_400_20" not in ignore_md["markdown_texts"]
+                    assert sliver_path not in ignore_md["markdown_images"]
         finally:
             if pipeline._doc_postprocessor is not None:
                 pipeline._doc_postprocessor.close()
@@ -1500,6 +1571,22 @@ class TestPaddleOCRVLIntegration:
         assert (
             markup_repair.apply("The price is $10.00 where $x + 1 > 0$.")
             == r"The price is $10.00 where \(x + 1 > 0\)."
+        )
+        assert (
+            markup_repair.apply("Budget $10/month, where $n = 12$.")
+            == r"Budget $10/month, where \(n = 12\)."
+        )
+        assert (
+            markup_repair.apply("Costs $10–20 when $n = 12$.")
+            == r"Costs $10–20 when \(n = 12\)."
+        )
+        assert (
+            markup_repair.apply("Costs $10-20 where $x > 0$.")
+            == r"Costs $10-20 where \(x > 0\)."
+        )
+        assert (
+            markup_repair.apply("Math $10-5$ and $10/x$ still convert.")
+            == r"Math \(10-5\) and \(10/x\) still convert."
         )
         assert (
             markup_repair.apply(
@@ -1554,6 +1641,180 @@ class TestPaddleOCRVLIntegration:
                 assert "Single item costs $19.99." in text
                 assert r"\textdollar" not in text
                 assert r"\(x + y = z\)" in text
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_restructure_pages_keeps_original_image_paths_and_embeds_docx_images(
+        self, tmp_path
+    ):
+        from PIL import Image
+
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        expected_path = "imgs/img_in_image_box_20_230_300_440.jpg"
+        markdown_images = {expected_path: Image.new("RGB", (280, 210), "blue")}
+        pages = [
+            {
+                "res": {
+                    "input_path": "http_export.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "paragraph_title",
+                            "block_content": "Section 1",
+                            "block_bbox": [20, 40, 300, 70],
+                        },
+                        {
+                            "block_label": "image",
+                            "block_content": "",
+                            "block_bbox": [20, 230, 300, 440],
+                        },
+                    ],
+                }
+            },
+            {
+                "res": {
+                    "input_path": "http_export.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "Second page body.",
+                            "block_bbox": [20, 80, 320, 110],
+                        }
+                    ],
+                }
+            },
+        ]
+
+        try:
+            for concat_flag in (True, False):
+                results = list(
+                    pipeline.restructure_pages(pages, concatenate_pages=concat_flag)
+                )
+                img_blk = next(
+                    b for b in results[0]["parsing_res_list"] if b.label == "image"
+                )
+                assert img_blk.image["path"] == expected_path
+                for pretty_flag in (True, False):
+                    md = results[0]._to_markdown(pretty=pretty_flag)
+                    assert expected_path in md["markdown_texts"]
+                    assert "page1_" not in md["markdown_texts"]
+
+            concat_res = list(
+                pipeline.restructure_pages(pages, concatenate_pages=True)
+            )[0]
+            for blk in concat_res["parsing_res_list"]:
+                if (
+                    isinstance(blk.image, dict)
+                    and blk.image.get("path") in markdown_images
+                ):
+                    blk.image["img"] = markdown_images[blk.image["path"]]
+            docx_dir = tmp_path / "docx_media"
+            concat_res.save_to_word(docx_dir)
+            docx_path = docx_dir / f"{Path(concat_res._get_input_fn()).stem}.docx"
+            with zipfile.ZipFile(docx_path) as zf:
+                assert any(name.startswith("word/media/") for name in zf.namelist())
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_concatenate_pages_keeps_shared_image_path_when_one_page_keeps_it(
+        self, tmp_path
+    ):
+        from PIL import Image
+
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        shared_path = "imgs/img_in_image_box_10_10_25_25.jpg"
+        shared_img = Image.new("RGB", (15, 15), "green")
+        blk_noise = PaddleOCRVLBlock("image", [10, 10, 25, 25], "")
+        blk_noise.image = {"path": shared_path, "img": shared_img}
+        blk_kept = PaddleOCRVLBlock("image", [10, 10, 25, 25], "")
+        blk_kept.image = {"path": shared_path, "img": shared_img}
+
+        pages = [
+            PaddleOCRVLResult(
+                {
+                    "input_path": "shared_img.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 1000,
+                    "height": 1000,
+                    "imgs_in_doc": [{"path": shared_path, "img": shared_img}],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [blk_noise],
+                }
+            ),
+            PaddleOCRVLResult(
+                {
+                    "input_path": "shared_img.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 100,
+                    "height": 100,
+                    "imgs_in_doc": [{"path": shared_path, "img": shared_img}],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [blk_kept],
+                }
+            ),
+        ]
+
+        try:
+            per_page = list(pipeline.restructure_pages(pages, concatenate_pages=False))
+            md0 = per_page[0]._to_markdown(pretty=True)
+            md1 = per_page[1]._to_markdown(pretty=True)
+            assert shared_path not in md0["markdown_texts"]
+            assert shared_path not in md0["markdown_images"]
+            assert shared_path in md1["markdown_texts"]
+            assert shared_path in md1["markdown_images"]
+
+            concat = list(pipeline.restructure_pages(pages, concatenate_pages=True))[0]
+            assert shared_path not in getattr(
+                concat, "_dropped_markdown_image_paths", ()
+            )
+            md_concat = concat._to_markdown(pretty=True)
+            assert shared_path in md_concat["markdown_texts"]
+            assert shared_path in md_concat["markdown_images"]
         finally:
             if pipeline._doc_postprocessor is not None:
                 pipeline._doc_postprocessor.close()

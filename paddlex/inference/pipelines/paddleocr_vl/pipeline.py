@@ -1712,17 +1712,23 @@ def _mark_figure_noise_blocks(page_results):
             refs.append((page_idx, box))
             entries.append((page_res, block))
 
+    dropped_indices = set(figure_noise.noise(refs))
     dropped_by_page = {}
-    for idx in figure_noise.noise(refs):
-        page_res, block = entries[idx]
-        block._drop_image_in_markdown = True
+    kept_by_page = {}
+    for idx, (page_res, block) in enumerate(entries):
         image = getattr(block, "image", None)
-        if isinstance(image, dict) and image.get("path"):
-            dropped_by_page.setdefault(id(page_res), (page_res, set()))[1].add(
-                image["path"]
-            )
-    for page_res, paths in dropped_by_page.values():
-        page_res._dropped_markdown_image_paths = frozenset(paths)
+        path = image.get("path") if isinstance(image, dict) else None
+        pid = id(page_res)
+        if idx in dropped_indices:
+            block._drop_image_in_markdown = True
+            if path:
+                dropped_by_page.setdefault(pid, (page_res, set()))[1].add(path)
+        elif path:
+            kept_by_page.setdefault(pid, set()).add(path)
+    for pid, (page_res, paths) in dropped_by_page.items():
+        effective = paths - kept_by_page.get(pid, set())
+        if effective:
+            page_res._dropped_markdown_image_paths = frozenset(effective)
 
 
 def _make_doc_markdown_postprocessor(cfg):
@@ -1775,8 +1781,16 @@ def _concatenate_page_results(page_results):
     dropped_paths = set().union(
         *(getattr(res, "_dropped_markdown_image_paths", ()) for res in page_results)
     )
-    if dropped_paths:
-        concat_res._dropped_markdown_image_paths = frozenset(dropped_paths)
+    kept_paths = {
+        blk.image["path"]
+        for blk in all_blocks
+        if not getattr(blk, "_drop_image_in_markdown", False)
+        and isinstance(getattr(blk, "image", None), dict)
+        and blk.image.get("path")
+    }
+    effective_dropped = dropped_paths - kept_paths
+    if effective_dropped:
+        concat_res._dropped_markdown_image_paths = frozenset(effective_dropped)
     return concat_res
 
 

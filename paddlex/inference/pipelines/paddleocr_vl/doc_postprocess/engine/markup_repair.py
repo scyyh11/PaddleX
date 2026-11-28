@@ -19,9 +19,15 @@ import re
 DISPLAY_DOLLAR = re.compile(r"\$\$(.*?)\$\$", re.S)
 DISPLAY_BRACKET = re.compile(r"\\\[(.*?)\\\]", re.S)
 INLINE_PAREN = re.compile(r"\\\((.*?)\\\)", re.S)
-CURRENCY = re.compile(
-    r"\$\s?\d+(?:,\d{3})*(?:\.\d+)?"
+_AMOUNT = (
+    r"\d+(?:,\d{3})*(?:\.\d+)?"
     r"(?:\s?(?:[kKmMbBtT]|bn|mn|million|billion|trillion|thousand|万|亿))?"
+)
+CURRENCY = re.compile(
+    rf"\$\s?{_AMOUNT}"
+    rf"(?:\s*[-–—~]\s*\$?{_AMOUNT})?"
+    rf"(?:\s*/\s*(?:[A-Za-z][A-Za-z0-9._-]*|[\u4e00-\u9fff]+))?"
+    rf"\+?"
     r"(?=$|[,.;:!?)\]}>，。；：！？）】]|\s*[+\-–—/×=]\s*\$|\s+(?![+\-*/=<>≤≥≠±×÷^_\\|]))"
 )
 
@@ -37,6 +43,14 @@ def _find_inline_math_end(s, start):
             continue
         if ch == "$":
             if s.startswith("$", j + 1):
+                return None
+            if (
+                j > start + 1
+                and s[j - 1].isspace()
+                and j + 1 < n
+                and not s[j + 1].isspace()
+                and s[j + 1] not in ",.;:!?)]}>，。；：！？）】"
+            ):
                 return None
             if not CURRENCY.match(s, j) and (j + 1 >= n or not s[j + 1].isdigit()):
                 return j

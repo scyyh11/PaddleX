@@ -18,14 +18,26 @@
 def render(pages):
     from ...pipeline import _basic_restructure_pages
 
+    page_copies = []
+    original = []
     for pi, p in enumerate(pages):
-        p.update(page_index=pi, input_path=f"page_{pi + 1}.png")
-    original = [
-        {"parsing_res_list": [dict(b) for b in p["parsing_res_list"]]} for p in pages
-    ]
+        blocks_copy = []
+        saved_blocks = []
+        for b in p["parsing_res_list"]:
+            bc = dict(b)
+            if isinstance(bc.get("image"), dict):
+                bc["image"] = dict(bc["image"])
+            blocks_copy.append(bc)
+            saved_blocks.append(dict(bc))
+        original.append({"parsing_res_list": saved_blocks})
+        p_copy = dict(p)
+        p_copy["parsing_res_list"] = blocks_copy
+        p_copy.update(page_index=pi, input_path=f"page_{pi + 1}.png")
+        page_copies.append({"res": p_copy})
+
     results = list(
         _basic_restructure_pages(
-            [{"res": dict(p)} for p in pages],
+            page_copies,
             merge_tables=False,
             relevel_titles=False,
             concatenate_pages=False,
@@ -46,8 +58,9 @@ def render(pages):
                         [page["width"], page["height"], page["width"], page["height"]],
                     )
                 ]
-                b.image["path"] = (
-                    f"page{pi}_" + ("_".join(str(v) for v in box)) + ".jpg"
-                )
+                b.image = {
+                    **b.image,
+                    "path": f"page{pi}_" + ("_".join(str(v) for v in box)) + ".jpg",
+                }
         parts.append(page._to_markdown(pretty=False)["markdown_texts"])
     return "\n\n".join(parts) + "\n"
