@@ -43,22 +43,3 @@ def apply(text):
 
     new = ENV.sub(sub, text)
     return new, count[0]
-
-
-if __name__ == "__main__":
-    tests = [
-        (
-            r"$$ \begin{align*}P(z)=\sum_{k=0}^{2019}b_kz^k.\end{align*} $$",
-            r"$$ P(z)=\sum_{k=0}^{2019}b_kz^k. $$",
-        ),
-        (
-            r"$$ \begin{align*}a&=b\\&=c\end{align*} $$",
-            r"$$ \begin{align*}a&=b\\&=c\end{align*} $$",
-        ),
-        (r"\begin{equation}x\&y&=1\end{equation}", r"x\&y=1"),
-        (r"\begin{aligned}a&=b\end{aligned}", r"\begin{aligned}a&=b\end{aligned}"),
-    ]
-    for a, b in tests:
-        out, _ = apply(a)
-        assert out == b, (a, out, b)
-    print("ok")

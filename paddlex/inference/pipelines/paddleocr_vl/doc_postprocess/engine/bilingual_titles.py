@@ -91,36 +91,3 @@ def apply(final):
             )
         page["parsing_res_list"] = out
     return events
-
-
-if __name__ == "__main__":
-    assert split("化学系\nDepartment of Chemistry") == [
-        ("化学系", 1),
-        ("Department of Chemistry", 1),
-    ]
-    assert (
-        split("CHINA TIAN YUAN HEALTHCARE GROUP LIMITED\n中國天元醫療集團有限公司")
-        is None
-    )
-    assert split("第三节\n公司业务概要") is None
-    assert split("PART 01.\n社媒平台\n热度分析") is None
-    assert split("2019 Annual Report\n年度报告\nAnnual") is None
-    pages = [
-        {
-            "parsing_res_list": [
-                {
-                    "block_label": "paragraph_title",
-                    "title_level": 2,
-                    "block_content": "化学系\nDepartment of Chemistry",
-                    "block_bbox": [0, 0, 10, 20],
-                }
-            ]
-        }
-    ]
-    apply(pages)
-    b = pages[0]["parsing_res_list"]
-    assert [(x["block_content"], x["title_level"]) for x in b] == [
-        ("化学系", 2),
-        ("Department of Chemistry", 3),
-    ], b
-    print("ok")

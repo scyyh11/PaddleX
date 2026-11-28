@@ -115,12 +115,14 @@ def _page_input(result):
     crops = {}
     if _is_paddlex_result(result):
         settings = result.get("model_settings") or {}
-        if settings.get("format_block_content"):
-            result["model_settings"] = dict(settings, format_block_content=False)
-            try:
-                data = result.json["res"]
-            finally:
-                result["model_settings"] = settings
+        if settings.get("format_block_content") and isinstance(result, dict):
+            unformatted = type(result)(
+                {
+                    **result,
+                    "model_settings": dict(settings, format_block_content=False),
+                }
+            )
+            data = unformatted.json["res"]
         else:
             data = result.json["res"]
         preprocessed = result.get("doc_preprocessor_res")
@@ -190,6 +192,9 @@ class DocPostprocessor:
 
     Each instance manages its own model store, configuration, and thread pool
     without mutating process-global environment variables or garbage collector state.
+    Document calls (``process`` / ``process_pages``) on a single instance are serialized
+    by an internal lock while ``num_threads`` parallelizes intra-document feature
+    extraction; create separate instances for concurrent multi-document throughput.
     """
 
     def __init__(
@@ -293,30 +298,6 @@ class DocPostprocessor:
                     self._model_store = models.ModelStore(self.models_dir, device="cpu")
             return self._build_engine("cpu", None), "cpu"
 
-    def _routing_name(self, name):
-        name = _SAFE_NAME.sub("_", name or "document")[:200] or "document"
-        route = self.models_dir / "headings" / "oof" / f"{name}.json"
-        if route.is_file():
-            fold = json.loads(route.read_text(encoding="utf-8")).get("fold")
-            needed = [
-                self.models_dir / "headings" / f"fold-{fold}",
-                self.models_dir / "parents" / f"parent-fold-{fold}",
-                self.models_dir / "spans" / f"span-fold-{fold}",
-                self.models_dir / "graph" / f"graph-fold-{fold}",
-            ]
-            for family in ("paragraph-runtime", "graphic", "tables"):
-                manifest = json.loads(
-                    (self.models_dir / family / "manifest.json").read_text(
-                        encoding="utf-8"
-                    )
-                )
-                folds = manifest.get("folds", {})
-                if name in folds:
-                    needed.append(self.models_dir / family / f"fold-{folds[name]}")
-            if all(models._has_model_stem(p.parent, p.name) for p in needed):
-                return name
-        return name + ".new"
-
     @staticmethod
     def measure_page(page, gray):
         """Measure heading typography features for one page and grayscale image."""
@@ -370,7 +351,7 @@ class DocPostprocessor:
 
         started = time.perf_counter()
         display_name = doc_name or default_doc_name(pages)
-        routing = self._routing_name(display_name)
+        doc_id = _SAFE_NAME.sub("_", display_name or "document")[:200] or "document"
         page_images = _PageImages(images)
         if all(source is None for source in images):
             logging.warning(
@@ -411,7 +392,7 @@ class DocPostprocessor:
                     )
                     with _GpuContext(device, self.gpu_index):
                         output = engine.process(
-                            routing,
+                            doc_id,
                             pages=pages,
                             heading_visual=heading_visual,
                             text_visual=text_visual,

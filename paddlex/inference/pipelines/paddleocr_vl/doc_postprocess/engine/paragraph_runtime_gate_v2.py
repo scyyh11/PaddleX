@@ -14,8 +14,6 @@
 
 """Veto weak paragraph merge links using current fragments, list markers, and page relation."""
 
-import json
-
 import numpy as np
 
 from . import doc_resources
@@ -31,15 +29,8 @@ def filter_links(nodes, links, doc=None, config=None):
     cfg = config if config is not None else ctx.get_config()
     same = cfg.paragraph_same_page_threshold
     cross = cfg.paragraph_cross_page_threshold
-    root = doc_resources.path("/runtime-paragraph-models")
-    folds = json.loads((root / "manifest.json").read_text(encoding="utf-8"))["folds"]
-    doc_name = doc or ""
-    package = ctx.load_model(
-        root / f"fold-{doc_resources.fold(folds, doc_name, root)}.joblib"
-    )
-    training_docs = package.get("training_documents")
-    if training_docs and doc_name in training_docs:
-        raise AssertionError(f"Document {doc_name!r} is in training_documents")
+    root = doc_resources.path("paragraph-runtime")
+    package = ctx.load_model(root / f"fold-{doc_resources.fold(root)}.joblib")
     base = extract(nodes, ctx.document_pages(), links)
     x = np.asarray(
         [

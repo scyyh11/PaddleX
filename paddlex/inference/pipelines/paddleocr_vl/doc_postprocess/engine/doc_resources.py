@@ -18,19 +18,21 @@ import pathlib
 
 from . import runtime_context
 
-DIRECTORIES = {
-    "/models": "headings",
-    "/models-parent": "parents",
-    "/models-span": "spans",
-    "/models-graph": "graph",
-    "/table-models": "tables",
-    "/runtime-paragraph-models": "paragraph-runtime",
-    "/graphic-models": "graphic",
-    "/paragraph-models": "paragraph-pairs",
-    "/models-text": "text",
-    "/models-structure": "structure",
-    "/models-joint-span": "joint-spans",
-}
+FAMILIES = frozenset(
+    {
+        "headings",
+        "parents",
+        "spans",
+        "graph",
+        "tables",
+        "paragraph-runtime",
+        "graphic",
+        "paragraph-pairs",
+        "text",
+        "structure",
+        "joint-spans",
+    }
+)
 
 
 def _model_exists(directory, stem):
@@ -40,35 +42,36 @@ def _model_exists(directory, stem):
     ) or (d / f"{stem}.joblib").is_file()
 
 
-def path(mount):
+def path(family):
     """Directory of a model family inside the active ``ModelStore``."""
-    mount = str(mount)
     store = runtime_context.model_store.get()
-    if store is None or mount not in DIRECTORIES:
-        return pathlib.Path(mount)
-    return pathlib.Path(store.root) / DIRECTORIES[mount]
+    if store is None:
+        raise RuntimeError(
+            f"Cannot resolve model family {family!r}: no active ModelStore in context."
+        )
+    if family not in FAMILIES:
+        raise ValueError(f"Unknown model family: {family!r}")
+    return pathlib.Path(store.root) / family
 
 
 def heading_route():
-    """Route of a document without an out-of-fold record."""
+    """Fold selection across all four heading model families."""
     final_stems = [
-        (path("/models"), "fold-final"),
-        (path("/models-parent"), "parent-fold-final"),
-        (path("/models-span"), "span-fold-final"),
-        (path("/models-graph"), "graph-fold-final"),
+        (path("headings"), "fold-final"),
+        (path("parents"), "parent-fold-final"),
+        (path("spans"), "span-fold-final"),
+        (path("graph"), "graph-fold-final"),
     ]
     if all(_model_exists(d, stem) for d, stem in final_stems):
         return {"fold": "final", "fit": "final_model"}
     return {
         "fold": runtime_context.default_fold.get(),
-        "fit": "default_fold_for_new_document",
+        "fit": "default_fold",
     }
 
 
-def fold(folds, doc, root):
-    """Manifest fold of a development document; ``final`` or default fold otherwise."""
-    if doc in folds:
-        return folds[doc]
+def fold(root):
+    """Return ``'final'`` when present in ``root``, otherwise the default fold."""
     return (
         "final"
         if _model_exists(root, "fold-final")

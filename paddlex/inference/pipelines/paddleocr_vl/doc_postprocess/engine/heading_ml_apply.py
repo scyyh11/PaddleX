@@ -15,7 +15,6 @@
 """Apply lightweight, document-held-out decision trees to prediction features."""
 
 import collections
-import json
 
 import numpy as np
 
@@ -62,14 +61,8 @@ def decode_levels(meta, x, probs, classes, pair_model):
     return [int(v) for v in reversed(path)]
 
 
-def _check_not_training_doc(model, doc):
-    training_docs = model.get("training_documents")
-    if training_docs and doc in training_docs:
-        raise AssertionError(f"Document {doc!r} is in training_documents")
-
-
 def apply(
-    results, log, doc, records, mode="conservative", decoder="rules", root="/models"
+    results, log, doc, records, mode="conservative", decoder="rules", root="headings"
 ):
     cfg = ctx.get_config()
     extractor = extract
@@ -78,14 +71,8 @@ def apply(
 
     x, meta, _texts = extractor(records)
     base = doc_resources.path(root)
-    route = base / "oof" / (doc + ".json")
-    oof = (
-        json.loads(route.read_text(encoding="utf-8"))
-        if route.exists()
-        else doc_resources.heading_route()
-    )
-    model = ctx.load_model(base / f"fold-{oof['fold']}.joblib")
-    _check_not_training_doc(model, doc)
+    route = doc_resources.heading_route()
+    model = ctx.load_model(base / f"fold-{route['fold']}.joblib")
     if len(meta) == 0:
         return {}
 
@@ -144,16 +131,14 @@ def apply(
         from .heading_parent_decode import decode as parent_decode
 
         parent_model = ctx.load_model(
-            doc_resources.path("/models-parent") / f"parent-fold-{oof['fold']}.joblib"
+            doc_resources.path("parents") / f"parent-fold-{route['fold']}.joblib"
         )
-        _check_not_training_doc(parent_model, doc)
         if cfg.heading_span_weight is not None:
             from .heading_span import decode as span_decode
 
             sm = ctx.load_model(
-                doc_resources.path("/models-span") / f"span-fold-{oof['fold']}.joblib"
+                doc_resources.path("spans") / f"span-fold-{route['fold']}.joblib"
             )
-            _check_not_training_doc(sm, doc)
 
             def one_segment(inds):
                 return span_decode(
@@ -180,9 +165,8 @@ def apply(
                 )
 
         gm = ctx.load_model(
-            doc_resources.path("/models-graph") / f"graph-fold-{oof['fold']}.joblib"
+            doc_resources.path("graph") / f"graph-fold-{route['fold']}.joblib"
         )
-        _check_not_training_doc(gm, doc)
         rel_tok = heading_joint_relations.MODEL.set(gm["relation"])
         try:
             boundaries = sorted(
@@ -208,9 +192,8 @@ def apply(
         from .heading_graph import decode as graph_decode
 
         gm = ctx.load_model(
-            doc_resources.path("/models-graph") / f"graph-fold-{oof['fold']}.joblib"
+            doc_resources.path("graph") / f"graph-fold-{route['fold']}.joblib"
         )
-        _check_not_training_doc(gm, doc)
         levels, info = graph_decode(
             [meta[i] for i in selected],
             x[selected],
@@ -269,8 +252,8 @@ def apply(
                 "old": old,
                 "new": new,
                 "p_title": float(p[i]),
-                "model_fold": oof["fold"],
-                "fit": oof.get("fit", "document_out_of_fold"),
+                "model_fold": route["fold"],
+                "fit": route["fit"],
                 "decoder": decoder,
             }
         )

@@ -66,20 +66,3 @@ def apply(text):
             last = m.end()
     out.append(text[last:])
     return "".join(out), len(drop)
-
-
-if __name__ == "__main__":
-    t = "a\n\n![](page1_100_100_110_110.jpg)\n\n![](page1_100_100_500_120.jpg)\n\n![](page1_100_100_400_400.jpg)\n"
-    o, n = apply(t)
-    assert (
-        n == 2
-        and "page1_100_100_400_400" in o
-        and "page1_100_100_110_110" not in o
-        and "page1_100_100_500_120" not in o
-    ), o
-    reps = "".join(f"![](page{p}_10_10_50_50.jpg)\n\n" for p in range(1, 8))
-    o, n = apply(reps)
-    assert n == 7, n
-    o, n = apply("".join(f"![](page{p}_10_10_50_50.jpg)\n\n" for p in range(1, 6)))
-    assert n == 0, n
-    print("ok")

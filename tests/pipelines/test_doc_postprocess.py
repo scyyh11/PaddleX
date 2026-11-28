@@ -55,6 +55,7 @@ from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess import (
     portable_trees,
 )
 from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.engine import (
+    doc_resources,
     markup_repair,
     native_similarity,
     postprocess,
@@ -157,7 +158,7 @@ end of trees
 """
 
 
-def _create_dummy_joblib_bundle(root: Path, include_oof: bool = False):
+def _create_dummy_joblib_bundle(root: Path):
     rng = np.random.default_rng(42)
     x_bin = rng.normal(size=(40, 6)).astype(np.float32)
     y_bin = (x_bin[:, 0] + x_bin[:, 1] > 0).astype(int)
@@ -206,10 +207,6 @@ def _create_dummy_joblib_bundle(root: Path, include_oof: bool = False):
             (d / "manifest.json").write_text(
                 json.dumps({"folds": {}}), encoding="utf-8"
             )
-    if include_oof:
-        oof = root / "headings" / "oof"
-        oof.mkdir(parents=True, exist_ok=True)
-        (oof / "docA.json").write_text(json.dumps({"fold": 0}), encoding="utf-8")
     (root / "bundle.json").write_text(json.dumps({"default_fold": 0}), encoding="utf-8")
     return root
 
@@ -487,7 +484,7 @@ class TestPortableTreesAndBundles:
         )
 
     def test_bundle_export_portable_and_end_to_end_pipeline(self, tmp_path):
-        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib", include_oof=True)
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
         dst = tmp_path / "dst_portable"
         bundle.export_portable(src, dst)
 
@@ -727,6 +724,7 @@ class TestPaddleOCRVLIntegration:
         )
         pipeline._doc_postprocessor = SimpleNamespace(
             models_dir=tmp_path,
+            config=DocPostprocessConfig(),
             available=lambda: True,
             process=lambda res_list, doc_name=None, images=None: fake_doc,
             close=lambda: None,
@@ -864,6 +862,7 @@ class TestPaddleOCRVLIntegration:
 
         pipeline._doc_postprocessor = SimpleNamespace(
             models_dir=tmp_path,
+            config=DocPostprocessConfig(),
             available=lambda: True,
             process=fail_if_called,
             close=lambda: None,
@@ -1927,3 +1926,158 @@ class TestPaddleOCRVLIntegration:
         finally:
             if pipeline._doc_postprocessor is not None:
                 pipeline._doc_postprocessor.close()
+
+    def test_page_input_does_not_mutate_model_settings(self):
+        from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.pipeline import (
+            _page_input,
+        )
+
+        orig_settings = {
+            "use_doc_preprocessor": False,
+            "use_layout_detection": False,
+            "use_chart_recognition": False,
+            "format_block_content": True,
+        }
+        res = PaddleOCRVLResult(
+            {
+                "input_path": "doc.pdf",
+                "page_index": 0,
+                "page_count": 1,
+                "width": 500,
+                "height": 600,
+                "model_settings": dict(orig_settings),
+                "parsing_res_list": [
+                    PaddleOCRVLBlock("paragraph_title", [20, 40, 200, 70], "Intro")
+                ],
+            }
+        )
+        plain, _, _ = _page_input(res)
+        assert res["model_settings"] == orig_settings
+        assert res["model_settings"]["format_block_content"] is True
+        assert plain["model_settings"]["format_block_content"] is False
+        assert plain["parsing_res_list"][0]["block_content"] == "Intro"
+
+    def test_doc_resources_requires_active_store_and_known_family(self, tmp_path):
+        from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.engine import (
+            runtime_context,
+        )
+
+        assert runtime_context.model_store.get() is None
+        with pytest.raises(RuntimeError):
+            doc_resources.path("headings")
+
+        tok = runtime_context.model_store.set(models.ModelStore(tmp_path))
+        try:
+            assert doc_resources.path("headings") == tmp_path.resolve() / "headings"
+            with pytest.raises(ValueError):
+                doc_resources.path("/models")
+        finally:
+            runtime_context.model_store.reset(tok)
+
+    def test_models_uses_paddlex_cache_dir_and_no_noop_portable_gpu(self):
+        from paddlex.utils.cache import CACHE_DIR
+
+        assert models.DEFAULT_DIR == Path(CACHE_DIR) / "doc_postprocess" / "models"
+        assert models.ENV_VAR == "PADDLEX_DOC_POSTPROCESS_MODELS"
+        assert not hasattr(models.ModelStore, "_convert_portable_gpu")
+
+    def test_setup_keeps_lightgbm_out_of_core_deps(self):
+        repo_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo_root))
+        try:
+            setup_mod = importlib.import_module("setup")
+        finally:
+            sys.path.pop(0)
+        assert "lightgbm" not in setup_mod.BASE_DEP_SPECS
+        assert "lightgbm" not in setup_mod.REQUIRED_DEPS
+        assert "lightgbm" in setup_mod.EXTRAS["plugins"]["doc-postprocess"]
+
+    def test_joblib_bundle_with_training_documents_runs_in_inference(self, tmp_path):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        portable_dir = bundle.export_portable(src, tmp_path / "portable")
+        bundle_dir = tmp_path / "joblib_with_train_docs"
+        for family, pattern in (
+            ("headings", "fold-0"),
+            ("parents", "parent-fold-0"),
+            ("spans", "span-fold-0"),
+            ("graph", "graph-fold-0"),
+            ("tables", "fold-0"),
+            ("paragraph-runtime", "fold-0"),
+            ("graphic", "fold-0"),
+        ):
+            dst_fam = bundle_dir / family
+            dst_fam.mkdir(parents=True, exist_ok=True)
+            manifest = portable_dir / family / "manifest.json"
+            if manifest.is_file():
+                (dst_fam / "manifest.json").write_text(
+                    manifest.read_text(encoding="utf-8"), encoding="utf-8"
+                )
+            pkg = portable_trees.load_portable_package(
+                portable_dir / family / f"{pattern}.safetensors"
+            )
+            pkg["training_documents"] = {"train_doc"}
+            joblib.dump(pkg, dst_fam / f"{pattern}.joblib")
+        (bundle_dir / "bundle.json").write_text(
+            json.dumps({"default_fold": 0}), encoding="utf-8"
+        )
+
+        pages = [
+            {
+                "res": {
+                    "input_path": "doc.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "First page paragraph.",
+                            "block_bbox": [20, 40, 300, 70],
+                        }
+                    ],
+                }
+            },
+            {
+                "res": {
+                    "input_path": "doc.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "Second page paragraph.",
+                            "block_bbox": [20, 40, 300, 70],
+                        }
+                    ],
+                }
+            },
+        ]
+        proc = DocPostprocessor(models_dir=bundle_dir, device="cpu", num_threads=1)
+        try:
+            doc = proc.process(pages, doc_name="train_doc", images=[None, None])
+            assert isinstance(doc, DocPostprocessResult)
+            assert doc["page_count"] == 2
+        finally:
+            proc.close()
+
+    def test_pipeline_init_initializes_doc_postprocess_with_none_default(self):
+        pipeline = _PaddleOCRVLPipeline({}, initial_predictor=False)
+        assert pipeline.use_doc_postprocess is None
+        assert pipeline.doc_postprocess_models_dir is None
+        assert pipeline.doc_postprocess_device == "cpu"
+        assert pipeline._doc_postprocessor is None
+        assert pipeline._doc_postprocess_warned is False
+        pipeline.close()

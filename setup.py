@@ -47,7 +47,6 @@ BASE_DEP_SPECS = {
     "langchain-text-splitters": ">= 0.2, < 1.0",
     "lxml": "",
     "latex2mathml": "",
-    "lightgbm": "",
     "matplotlib": "",
     "modelscope": ">= 1.28.0",
     "numpy": ">= 1.24, < 2.4",

@@ -14,21 +14,15 @@
 
 """Combine a small composite mark into one image region; text content is retained."""
 
-import json
-
 from . import doc_resources
 from . import runtime_context as ctx
 from .graphic_components import cover_mark, extract, group
 
 
 def apply(raw, final, doc):
-    root = doc_resources.path("/graphic-models")
-    folds = json.loads((root / "manifest.json").read_text(encoding="utf-8"))["folds"]
-    fold = doc_resources.fold(folds, doc, root)
+    root = doc_resources.path("graphic")
+    fold = doc_resources.fold(root)
     package = ctx.load_model(root / f"fold-{fold}.joblib")
-    training_docs = package.get("training_documents")
-    if training_docs and doc in training_docs:
-        raise AssertionError(f"Document {doc!r} is in training_documents")
     nodes, edges, x = extract(raw)
     if not len(x):
         return []

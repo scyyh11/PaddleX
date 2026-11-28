@@ -14,19 +14,17 @@
 
 """Model bundle discovery, validation, and instance-scoped loading."""
 
-import importlib
 import json
 import os
 import pathlib
 import threading
 
-from .portable_trees import PortableTreeClassifier, load_portable_package
+from .....utils.cache import CACHE_DIR
+from .portable_trees import load_portable_package
 
-ENV_VAR = "PADDLEOCR_DOC_POSTPROCESS_MODELS"
-ALT_ENV_VAR = "PADDLEX_DOC_POSTPROCESS_MODELS"
-DEFAULT_DIR = (
-    pathlib.Path(os.path.expanduser("~")) / ".paddleocr" / "doc_postprocess" / "models"
-)
+ENV_VAR = "PADDLEX_DOC_POSTPROCESS_MODELS"
+ALT_ENV_VAR = "PADDLEOCR_DOC_POSTPROCESS_MODELS"
+DEFAULT_DIR = pathlib.Path(CACHE_DIR) / "doc_postprocess" / "models"
 
 # family directory -> (model file stem pattern, auxiliary files required)
 HEADING_FAMILIES = ("headings", "parents", "spans", "graph")
@@ -50,10 +48,10 @@ def find_models_dir(models_dir=None):
     """Resolve the model bundle directory (it may not exist yet)."""
     if models_dir:
         return pathlib.Path(models_dir).expanduser()
-    if os.environ.get(ALT_ENV_VAR):
-        return pathlib.Path(os.environ[ALT_ENV_VAR]).expanduser()
     if os.environ.get(ENV_VAR):
         return pathlib.Path(os.environ[ENV_VAR]).expanduser()
+    if os.environ.get(ALT_ENV_VAR):
+        return pathlib.Path(os.environ[ALT_ENV_VAR]).expanduser()
     return DEFAULT_DIR
 
 
@@ -148,9 +146,8 @@ class ModelStore:
             if cached is not None:
                 return cached
             if resolved.suffix == ".safetensors":
+                # Portable .safetensors tree packages run in pure NumPy on CPU.
                 package = load_portable_package(resolved)
-                if self.device == "cuda":
-                    package = self._convert_portable_gpu(package)
             else:
                 import joblib
 
@@ -161,19 +158,3 @@ class ModelStore:
                     package = gpu_trees.convert_package(package)
             self._cache[key] = package
             return package
-
-    @staticmethod
-    def _convert_portable_gpu(package):
-        # Portable packages can run directly in NumPy on CPU; when CUDA is requested and CuPy
-        # is available, only non-portable joblib packages need gpu_trees conversion, whereas
-        # PortableTreeClassifier keeps exact deterministic NumPy/CUDA parity.
-        try:
-            importlib.import_module("cupy")
-        except ImportError:
-            return package
-        out = dict(package)
-        for k, v in out.items():
-            if isinstance(v, PortableTreeClassifier) and v.kind in ("extra", "hgb"):
-                # Keep PortableTreeClassifier as-is (exact float64 parity).
-                pass
-        return out

@@ -127,31 +127,3 @@ def apply(md):
         )
         for s in chunks
     )
-
-
-if __name__ == "__main__":
-    import hashlib
-    import json
-    import pathlib
-
-    w = pathlib.Path(
-        "/ssd4/cuicheng01-paddleocr-vl16-postprocess-20261102/texts-20261104"
-    )
-    source = w / "experiments/text-hybrid-0.999"
-    dest = w / "experiments/text-markup"
-    (dest / "predictions").mkdir(parents=True, exist_ok=True)
-    (dest / "audit").mkdir(exist_ok=True)
-    for p in sorted((source / "predictions").glob("*.md")):
-        old = p.read_text()
-        new = apply(old)
-        (dest / "predictions" / p.name).write_text(new)
-        (dest / "audit" / (p.stem + ".json")).write_text(
-            json.dumps(
-                {
-                    "source": "text-hybrid-0.999",
-                    "markup_repaired": new != old,
-                    "sha256": hashlib.sha256(new.encode()).hexdigest(),
-                }
-            )
-        )
-    print("complete", len(list((dest / "predictions").glob("*.md"))))

@@ -235,18 +235,16 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
             # Document-level post-processing for multi-page documents (opt-in via pipeline config,
             # enabled for PaddleOCR-VL-1.8 when a model bundle is available).
-            self.use_doc_postprocess = config.get("use_doc_postprocess", False)
-            self.doc_postprocess_models_dir = config.get(
-                "doc_postprocess_models_dir", None
-            )
-            self.doc_postprocess_device = config.get("doc_postprocess_device", "cpu")
-            self._doc_postprocessor = None
-            self._doc_postprocess_warned = False
+        self.use_doc_postprocess = config.get("use_doc_postprocess", None)
+        self.doc_postprocess_models_dir = config.get("doc_postprocess_models_dir", None)
+        self.doc_postprocess_device = config.get("doc_postprocess_device", "cpu")
+        self._doc_postprocessor = None
+        self._doc_postprocess_warned = False
 
     def close(self):
         if hasattr(self, "vl_rec_model"):
             self.vl_rec_model.close()
-        if getattr(self, "_doc_postprocessor", None) is not None:
+        if self._doc_postprocessor is not None:
             self._doc_postprocessor.close()
             self._doc_postprocessor = None
 
@@ -1580,20 +1578,19 @@ class _PaddleOCRVLPipeline(BasePipeline):
         )
 
     def _get_doc_postprocessor(self):
-        if getattr(self, "_doc_postprocessor", None) is None:
+        if self._doc_postprocessor is None:
             from .doc_postprocess import DocPostprocessor
 
-            models_dir = getattr(self, "doc_postprocess_models_dir", None)
-            device = getattr(self, "doc_postprocess_device", "cpu")
             self._doc_postprocessor = DocPostprocessor(
-                models_dir=models_dir, device=device
+                models_dir=self.doc_postprocess_models_dir,
+                device=self.doc_postprocess_device,
             )
         return self._doc_postprocessor
 
     def _doc_postprocess_ready(self, requested: Optional[bool] = None) -> bool:
         """Whether multi-page document post-processing should run."""
         if requested is None:
-            requested = getattr(self, "use_doc_postprocess", False)
+            requested = self.use_doc_postprocess
         if requested is False:
             return False
         processor = self._get_doc_postprocessor()
@@ -1603,11 +1600,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
             from .doc_postprocess.models import check
 
             check(processor.models_dir)
-        if not getattr(self, "_doc_postprocess_warned", False):
+        if not self._doc_postprocess_warned:
             logging.warning(
                 "Document post-processing models were not found in %s; "
                 "multi-page results fall back to basic PaddleX restructuring. "
-                "Set `doc_postprocess_models_dir` or PADDLEOCR_DOC_POSTPROCESS_MODELS "
+                "Set `doc_postprocess_models_dir` or PADDLEX_DOC_POSTPROCESS_MODELS "
                 "to enable it, or set `use_doc_postprocess=False` to silence this warning.",
                 processor.models_dir,
             )
@@ -1665,11 +1662,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     result[key] = source[key]
             result.setdefault("page_count", len(res_list))
             results.append(result)
-        cfg = getattr(getattr(self, "_doc_postprocessor", None), "config", None)
-        if cfg is None:
-            from .doc_postprocess.config import DocPostprocessConfig
-
-            cfg = DocPostprocessConfig()
+        cfg = self._doc_postprocessor.config
         if cfg.figure_noise:
             _mark_figure_noise_blocks(results)
         md_postprocess = _make_doc_markdown_postprocessor(cfg)

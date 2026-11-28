@@ -92,21 +92,13 @@ class DocumentPostprocessor:
         self,
         device="cuda",
         stages=("headings", "tables", "text"),
-        table_models="/table-models",
+        table_models="tables",
     ):
         if device not in ("cpu", "cuda"):
             raise ValueError(device)
         self.device = device
         self.stages = stages
         self.table_models = doc_resources.path(table_models)
-        if "tables" in stages:
-            import json
-
-            self.table_manifest = json.loads(
-                (self.table_models / "manifest.json").read_text(encoding="utf-8")
-            )
-        else:
-            self.table_manifest = None
 
     def warmup(self):
         started = time.perf_counter()
@@ -114,14 +106,14 @@ class DocumentPostprocessor:
         try:
             paths = []
             if "headings" in self.stages:
-                for root, pattern in [
-                    ("/models", "fold-*"),
-                    ("/models-parent", "parent-fold-*"),
-                    ("/models-span", "span-fold-*"),
+                for family, pattern in [
+                    ("headings", "fold-*"),
+                    ("parents", "parent-fold-*"),
+                    ("spans", "span-fold-*"),
                 ]:
                     paths += sorted(
                         p
-                        for p in doc_resources.path(root).glob(pattern)
+                        for p in doc_resources.path(family).glob(pattern)
                         if p.suffix in (".safetensors", ".joblib")
                     )
             if "tables" in self.stages:
@@ -130,15 +122,15 @@ class DocumentPostprocessor:
                     for p in self.table_models.glob("fold-*")
                     if p.suffix in (".safetensors", ".joblib")
                 )
-            for root, pattern in [
-                ("/models-graph", "graph-fold-*"),
-                ("/runtime-paragraph-models", "fold-*"),
-                ("/paragraph-models", "fold-*"),
-                ("/graphic-models", "fold-*"),
+            for family, pattern in [
+                ("graph", "graph-fold-*"),
+                ("paragraph-runtime", "fold-*"),
+                ("paragraph-pairs", "fold-*"),
+                ("graphic", "fold-*"),
             ]:
                 paths += sorted(
                     p
-                    for p in doc_resources.path(root).glob(pattern)
+                    for p in doc_resources.path(family).glob(pattern)
                     if p.suffix in (".safetensors", ".joblib")
                 )
             seen_stems = set()
@@ -216,13 +208,8 @@ class DocumentPostprocessor:
                 )
             if "tables" in self.stages:
                 t = time.perf_counter()
-                fold = doc_resources.fold(
-                    self.table_manifest["folds"], doc, self.table_models
-                )
+                fold = doc_resources.fold(self.table_models)
                 package = ctx.load_model(self.table_models / f"fold-{fold}.joblib")
-                training_docs = package.get("training_documents")
-                if training_docs and doc in training_docs:
-                    raise AssertionError(f"Document {doc!r} is in training_documents")
                 v2_tok = ctx.table_features_v2.set(
                     package.get("feature_version", 1) == 2
                 )
