@@ -62,7 +62,10 @@ from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.engine import (
     unified,
 )
 from paddlex.inference.pipelines.paddleocr_vl.pipeline import _PaddleOCRVLPipeline
-from paddlex.inference.pipelines.paddleocr_vl.result import PaddleOCRVLResult
+from paddlex.inference.pipelines.paddleocr_vl.result import (
+    PaddleOCRVLBlock,
+    PaddleOCRVLResult,
+)
 from paddlex.utils.deps import is_serving_plugin_available
 
 
@@ -1228,3 +1231,137 @@ class TestPaddleOCRVLIntegration:
             assert doc["page_count"] == 2
         finally:
             processor.close()
+
+    def test_restructure_pages_applies_final_markdown_repairs(self, tmp_path):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        canvas = np.full((600, 500, 3), 245, dtype=np.uint8)
+        from PIL import Image
+
+        tiny_img = Image.new("RGB", (5, 5), "white")
+        real_img = Image.new("RGB", (300, 250), "white")
+        noise_blk = PaddleOCRVLBlock("image", [10, 10, 15, 15], "")
+        noise_blk.image = {
+            "path": "imgs/img_in_image_box_10_10_15_15.jpg",
+            "img": tiny_img,
+        }
+        keep_blk = PaddleOCRVLBlock("image", [50, 200, 350, 450], "")
+        keep_blk.image = {
+            "path": "imgs/img_in_image_box_50_200_350_450.jpg",
+            "img": real_img,
+        }
+        pages = [
+            PaddleOCRVLResult(
+                {
+                    "input_path": "repairs.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "doc_preprocessor_res": {"output_img": canvas},
+                    "imgs_in_doc": [],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        PaddleOCRVLBlock(
+                            "text",
+                            [20, 40, 460, 90],
+                            "A. 正数 B. 负数 C. 非正数 D. 非负数",
+                        ),
+                        PaddleOCRVLBlock(
+                            "display_formula",
+                            [40, 120, 440, 170],
+                            r"$$ \begin{align*} x = 1 \end{align*} $$",
+                        ),
+                        noise_blk,
+                        keep_blk,
+                    ],
+                }
+            ),
+            PaddleOCRVLResult(
+                {
+                    "input_path": "repairs.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "doc_preprocessor_res": {"output_img": canvas},
+                    "imgs_in_doc": [],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        PaddleOCRVLBlock(
+                            "display_formula",
+                            [40, 60, 440, 150],
+                            r"$$ \begin{align*} a&=b \\ &=c \tag{1} \end{align*} $$",
+                        )
+                    ],
+                }
+            ),
+        ]
+
+        try:
+            for concat_flag in (True, False):
+                results = list(
+                    pipeline.restructure_pages(pages, concatenate_pages=concat_flag)
+                )
+                for pretty_flag in (True, False):
+                    merged_text = "\n\n".join(
+                        r._to_markdown(pretty=pretty_flag)["markdown_texts"]
+                        for r in results
+                    )
+                    assert "A. 正数\n\nB. 负数\n\nC. 非正数\n\nD. 非负数" in merged_text
+                    assert r"\begin{align*}" not in merged_text
+                    assert (
+                        r"\begin{aligned} a&=b \\ &=c \quad(1) \end{aligned}"
+                        in merged_text
+                    )
+                    assert "10_10_15_15" not in merged_text
+                    assert "50_200_350_450" in merged_text
+
+                noise_images = [
+                    k
+                    for r in results
+                    for k in r._to_markdown(pretty=False)["markdown_images"]
+                    if "10_10_15_15" in k
+                ]
+                assert noise_images == []
+                assert len(results[0].json["res"]["parsing_res_list"]) > 0
+
+            concat_res = list(
+                pipeline.restructure_pages(pages, concatenate_pages=True)
+            )[0]
+            docx_dir = tmp_path / "repairs_docx"
+            concat_res.save_to_word(docx_dir)
+            docx_path = docx_dir / f"{Path(concat_res._get_input_fn()).stem}.docx"
+            assert docx_path.is_file()
+            assert docx_path.read_bytes()[:2] == b"PK"
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_readme_uses_public_postprocess_document_api(self):
+        readme = (
+            Path(__file__).resolve().parents[2]
+            / "paddlex"
+            / "inference"
+            / "pipelines"
+            / "paddleocr_vl"
+            / "doc_postprocess"
+            / "README.md"
+        ).read_text(encoding="utf-8")
+        assert "pipeline.postprocess_document(pages)" in readme
+        assert "pipeline.pipeline.postprocess_document(" not in readme

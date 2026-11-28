@@ -20,7 +20,7 @@ res = next(pipeline.restructure_pages(pages, concatenate_pages=True))
 res.save_to_markdown("output")
 
 # Direct DocPostprocessResult (includes timings and intermediate events):
-doc = pipeline.pipeline.postprocess_document(pages)
+doc = pipeline.postprocess_document(pages)
 doc.save_to_markdown("output")
 ```
 

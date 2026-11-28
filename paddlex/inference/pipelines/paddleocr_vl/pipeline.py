@@ -1665,7 +1665,71 @@ class _PaddleOCRVLPipeline(BasePipeline):
                     result[key] = source[key]
             result.setdefault("page_count", len(res_list))
             results.append(result)
+        cfg = getattr(getattr(self, "_doc_postprocessor", None), "config", None)
+        if cfg is None:
+            from .doc_postprocess.config import DocPostprocessConfig
+
+            cfg = DocPostprocessConfig()
+        if cfg.figure_noise:
+            _mark_figure_noise_blocks(results)
+        md_postprocess = _make_doc_markdown_postprocessor(cfg)
+        for result in results:
+            result._markdown_postprocess = md_postprocess
         return results
+
+
+def _mark_figure_noise_blocks(page_results):
+    """Mark tiny/sliver/repeated decorative image blocks to skip in Markdown output."""
+    from .doc_postprocess.engine import figure_noise
+
+    refs = []
+    blocks = []
+    for page_idx, page_res in enumerate(page_results, 1):
+        width = page_res.get("width")
+        height = page_res.get("height")
+        width = width[0] if isinstance(width, list) else width
+        height = height[0] if isinstance(height, list) else height
+        if not width or not height:
+            continue
+        ms = page_res.get("model_settings") or {}
+        ignore = set(ms.get("markdown_ignore_labels", []))
+        use_chart_rec = ms.get("use_chart_recognition", False)
+        use_layout = ms.get("use_layout_detection", False)
+        for block in page_res.get("parsing_res_list", []):
+            if not getattr(block, "image", None) or block.label in ignore:
+                continue
+            is_img = (
+                block.label in ("image", "header_image", "footer_image")
+                or (block.label == "seal" and use_layout)
+                or (block.label == "chart" and not use_chart_rec)
+            )
+            if not is_img:
+                continue
+            box = [
+                max(0, min(1000, round(float(v) / size * 1000)))
+                for v, size in zip(block.bbox, [width, height, width, height])
+            ]
+            refs.append((page_idx, box))
+            blocks.append(block)
+    for idx in figure_noise.noise(refs):
+        blocks[idx]._skip_in_markdown = True
+
+
+def _make_doc_markdown_postprocessor(cfg):
+    """Build a callable applying final doc-postprocess Markdown repairs."""
+
+    def _postprocess_markdown(text):
+        from .doc_postprocess.engine.unified import apply_markdown_repairs
+
+        repaired, _ = apply_markdown_repairs(
+            text,
+            cfg,
+            apply_markup_repair=True,
+            apply_figure_noise=True,
+        )
+        return repaired
+
+    return _postprocess_markdown
 
 
 def _concatenate_page_results(page_results):
@@ -1693,7 +1757,12 @@ def _concatenate_page_results(page_results):
         all_page_res["doc_preprocessor_res"] = [
             res["doc_preprocessor_res"] for res in page_results
         ]
-    return PaddleOCRVLResult(all_page_res)
+    concat_res = PaddleOCRVLResult(all_page_res)
+    if (
+        markdown_postprocess := getattr(page_results[0], "_markdown_postprocess", None)
+    ) is not None:
+        concat_res._markdown_postprocess = markdown_postprocess
+    return concat_res
 
 
 def _block_images(result):

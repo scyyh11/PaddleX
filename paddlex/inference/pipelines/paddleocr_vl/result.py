@@ -484,12 +484,22 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
 
         handle_funcs_dict = self._build_handle_funcs_dict(pretty=pretty)
 
+        blocks = [
+            block
+            for block in self["parsing_res_list"]
+            if not getattr(block, "_skip_in_markdown", False)
+        ]
+
         result = MarkdownConverter.convert(
-            self["parsing_res_list"],
+            blocks,
             handle_funcs_dict=handle_funcs_dict,
             show_formula_number=show_formula_number,
             imgs_in_doc=self["imgs_in_doc"],
         )
+        if (
+            markdown_postprocess := getattr(self, "_markdown_postprocess", None)
+        ) is not None:
+            result["markdown_texts"] = markdown_postprocess(result["markdown_texts"])
         result["page_index"] = self["page_index"]
         result["input_path"] = self["input_path"]
         return result

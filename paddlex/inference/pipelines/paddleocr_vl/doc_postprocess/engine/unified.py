@@ -51,6 +51,42 @@ from . import (
 )
 
 
+def apply_markdown_repairs(
+    text,
+    cfg=None,
+    *,
+    apply_markup_repair=True,
+    apply_figure_noise=True,
+):
+    """Apply post-render Markdown repairs and return ``(text, events)``."""
+    if cfg is None:
+        cfg = ctx.get_config()
+    repair_events = {}
+    if apply_markup_repair:
+        text = markup_repair.apply(text)
+    if cfg.option_split:
+        text, count = option_split.apply(text)
+        repair_events["option_split"] = (
+            [{"kind": "options_split", "count": count}] if count else []
+        )
+    if cfg.formula_single_line_env:
+        text, count = formula_wrappers.apply(text)
+        repair_events["formula_wrappers"] = (
+            [{"kind": "single_line_env_unwrapped", "count": count}] if count else []
+        )
+    if cfg.formula_repair:
+        text, count = formula_repair.apply(text)
+        repair_events["formula_repair"] = (
+            [{"kind": "display_formula_repaired", "count": count}] if count else []
+        )
+    if apply_figure_noise and cfg.figure_noise:
+        text, count = figure_noise.apply(text)
+        repair_events["figure_noise"] = (
+            [{"kind": "image_noise_removed", "count": count}] if count else []
+        )
+    return text, repair_events
+
+
 class DocumentPostprocessor:
     def __init__(
         self,
@@ -237,32 +273,13 @@ class DocumentPostprocessor:
 
             t = time.perf_counter()
             text = renderer.render(final)
-            if "text" in self.stages:
-                text = markup_repair.apply(text)
-            if cfg.option_split:
-                text, count = option_split.apply(text)
-                events["option_split"] = (
-                    [{"kind": "options_split", "count": count}] if count else []
-                )
-            if cfg.formula_single_line_env:
-                text, count = formula_wrappers.apply(text)
-                events["formula_wrappers"] = (
-                    [{"kind": "single_line_env_unwrapped", "count": count}]
-                    if count
-                    else []
-                )
-            if cfg.formula_repair:
-                text, count = formula_repair.apply(text)
-                events["formula_repair"] = (
-                    [{"kind": "display_formula_repaired", "count": count}]
-                    if count
-                    else []
-                )
-            if cfg.figure_noise:
-                text, count = figure_noise.apply(text)
-                events["figure_noise"] = (
-                    [{"kind": "image_noise_removed", "count": count}] if count else []
-                )
+            text, repair_events = apply_markdown_repairs(
+                text,
+                cfg,
+                apply_markup_repair="text" in self.stages,
+                apply_figure_noise=True,
+            )
+            events.update(repair_events)
             timings["render_ms"] = (time.perf_counter() - t) * 1000
             timings["total_ms"] = (time.perf_counter() - started) * 1000
             return {
