@@ -54,6 +54,7 @@ from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess import (
     portable_trees,
 )
 from paddlex.inference.pipelines.paddleocr_vl.doc_postprocess.engine import (
+    markup_repair,
     native_similarity,
     postprocess,
     table_graph,
@@ -1365,3 +1366,194 @@ class TestPaddleOCRVLIntegration:
         ).read_text(encoding="utf-8")
         assert "pipeline.postprocess_document(pages)" in readme
         assert "pipeline.pipeline.postprocess_document(" not in readme
+
+    def test_noise_image_preserves_ocr_text_and_filters_image_maps(self, tmp_path):
+        from PIL import Image
+
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        canvas = np.full((600, 500, 3), 245, dtype=np.uint8)
+        sliver_path = "imgs/img_in_image_box_10_10_400_20.jpg"
+        keep_path = "imgs/img_in_image_box_50_200_350_450.jpg"
+
+        sliver_blk = PaddleOCRVLBlock("image", [10, 10, 400, 20], "REF C4801")
+        sliver_blk.image = {
+            "path": sliver_path,
+            "img": Image.new("RGB", (390, 10), "white"),
+        }
+        keep_blk = PaddleOCRVLBlock("image", [50, 200, 350, 450], "Figure 1")
+        keep_blk.image = {
+            "path": keep_path,
+            "img": Image.new("RGB", (300, 250), "white"),
+        }
+
+        pages = [
+            PaddleOCRVLResult(
+                {
+                    "input_path": "ocr_noise.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "doc_preprocessor_res": {"output_img": canvas},
+                    "imgs_in_doc": [
+                        {"path": sliver_path, "img": sliver_blk.image["img"]}
+                    ],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                        "use_ocr_for_image_block": True,
+                    },
+                    "parsing_res_list": [sliver_blk, keep_blk],
+                }
+            ),
+            PaddleOCRVLResult(
+                {
+                    "input_path": "ocr_noise.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "doc_preprocessor_res": {"output_img": canvas},
+                    "imgs_in_doc": [],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                        "use_ocr_for_image_block": True,
+                    },
+                    "parsing_res_list": [
+                        PaddleOCRVLBlock(
+                            "text", [40, 80, 320, 110], "Follow-up page text."
+                        )
+                    ],
+                }
+            ),
+        ]
+
+        app_path = (
+            Path(__file__).resolve().parents[2]
+            / "paddlex"
+            / "inference"
+            / "serving"
+            / "basic_serving"
+            / "_pipeline_apps"
+            / "paddleocr_vl.py"
+        )
+        tree = ast.parse(app_path.read_text(encoding="utf-8"))
+        filter_node = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_filter_markdown_images"
+        )
+        ns = {"Any": object}
+        exec(
+            compile(
+                ast.Module(body=[filter_node], type_ignores=[]), str(app_path), "exec"
+            ),
+            ns,
+        )
+        filter_fn = ns["_filter_markdown_images"]
+
+        try:
+            for concat_flag in (True, False):
+                results = list(
+                    pipeline.restructure_pages(pages, concatenate_pages=concat_flag)
+                )
+                assert sliver_path in getattr(
+                    results[0], "_dropped_markdown_image_paths", ()
+                )
+                filtered_http_imgs = filter_fn(
+                    {sliver_path: "b64_noise", keep_path: "b64_keep"}, results[0]
+                )
+                assert sliver_path not in filtered_http_imgs
+                assert keep_path in filtered_http_imgs
+
+                for pretty_flag in (True, False):
+                    md = results[0]._to_markdown(pretty=pretty_flag)
+                    assert "REF C4801" in md["markdown_texts"]
+                    assert "10_10_400_20" not in md["markdown_texts"]
+                    assert "50_200_350_450" in md["markdown_texts"]
+                    assert sliver_path not in md["markdown_images"]
+                    assert keep_path in md["markdown_images"]
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()
+
+    def test_markup_repair_preserves_currency_and_converts_real_math(self, tmp_path):
+        assert (
+            markup_repair.apply("Base price $10.00 and tax $2.25.")
+            == "Base price $10.00 and tax $2.25."
+        )
+        assert (
+            markup_repair.apply("Single item costs $19.99.")
+            == "Single item costs $19.99."
+        )
+        assert (
+            markup_repair.apply("The price is $10.00 where $x + 1 > 0$.")
+            == r"The price is $10.00 where \(x + 1 > 0\)."
+        )
+        assert (
+            markup_repair.apply(
+                "Range $10-$20, sum $10.00 + $20.00 = $30.00, math $1 + 2 = 3$ and $10^2$."
+            )
+            == r"Range $10-$20, sum $10.00 + $20.00 = $30.00, math \(1 + 2 = 3\) and \(10^2\)."
+        )
+
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        pages = [
+            self._dummy_page_res(0, "Pricing Overview"),
+            {
+                "res": {
+                    "input_path": "doc.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 500,
+                    "height": 600,
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": (
+                                "Base price $10.00 and tax $2.25. "
+                                "Single item costs $19.99. Formula $x + y = z$."
+                            ),
+                            "block_bbox": [20, 80, 440, 130],
+                        }
+                    ],
+                }
+            },
+        ]
+        try:
+            for concat_flag in (True, False):
+                results = list(
+                    pipeline.restructure_pages(pages, concatenate_pages=concat_flag)
+                )
+                text = "\n\n".join(r._to_markdown()["markdown_texts"] for r in results)
+                assert "Base price $10.00 and tax $2.25." in text
+                assert "Single item costs $19.99." in text
+                assert r"\textdollar" not in text
+                assert r"\(x + y = z\)" in text
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()

@@ -13,25 +13,93 @@
 # limitations under the License.
 
 """Keep math delimiters local to their paragraph; preserve literal currency signs."""
+
 import re
 
-PAIR = re.compile(
-    r"\$\$(.*?)\$\$|\\\[(.*?)\\\]|\\\((.*?)\\\)|(?<!\\)\$(.*?)(?<!\\)\$", re.S
+DISPLAY_DOLLAR = re.compile(r"\$\$(.*?)\$\$", re.S)
+DISPLAY_BRACKET = re.compile(r"\\\[(.*?)\\\]", re.S)
+INLINE_PAREN = re.compile(r"\\\((.*?)\\\)", re.S)
+CURRENCY = re.compile(
+    r"\$\s?\d+(?:,\d{3})*(?:\.\d+)?"
+    r"(?:\s?(?:[kKmMbBtT]|bn|mn|million|billion|trillion|thousand|万|亿))?"
+    r"(?=$|[,.;:!?)\]}>，。；：！？）】]|\s*[+\-–—/×=]\s*\$|\s+(?![+\-*/=<>≤≥≠±×÷^_\\|]))"
 )
 
 
-def paragraph(s):
-    def sub(m):
-        k = next(i for i, v in enumerate(m.groups()) if v is not None)
-        v = m.group(k + 1)
-        if k < 2:
-            # Spurious dollar inside a display formula is a mismatched OCR delimiter.
-            v = v.replace("$", "")
-            return r"\[" + v + r"\]"
-        return r"\(" + v + r"\)"
+def _find_inline_math_end(s, start):
+    """Find matching unescaped single closing ``$`` for inline math, or ``None``."""
+    j = start + 1
+    n = len(s)
+    while j < n:
+        ch = s[j]
+        if ch == "\\":
+            j += 2
+            continue
+        if ch == "$":
+            if s.startswith("$", j + 1):
+                return None
+            if not CURRENCY.match(s, j) and (j + 1 >= n or not s[j + 1].isdigit()):
+                return j
+            return None
+        j += 1
+    return None
 
-    s = PAIR.sub(sub, s)
-    return s.replace("\\$", r"\textdollar{}").replace("$", r"\textdollar{}")
+
+def paragraph(s):
+    out = []
+    i = 0
+    n = len(s)
+    while i < n:
+        if s.startswith("$$", i):
+            m = DISPLAY_DOLLAR.match(s, i)
+            if m:
+                v = m.group(1).replace("$", "")
+                out.append(r"\[" + v + r"\]")
+                i = m.end()
+                continue
+            out.append("$$")
+            i += 2
+            continue
+        if s.startswith(r"\[", i):
+            m = DISPLAY_BRACKET.match(s, i)
+            if m:
+                v = m.group(1).replace("$", "")
+                out.append(r"\[" + v + r"\]")
+                i = m.end()
+                continue
+        if s.startswith(r"\(", i):
+            m = INLINE_PAREN.match(s, i)
+            if m:
+                out.append(r"\(" + m.group(1) + r"\)")
+                i = m.end()
+                continue
+        if s[i] == "\\":
+            if i + 1 < n:
+                out.append(s[i : i + 2])
+                i += 2
+            else:
+                out.append("\\")
+                i += 1
+            continue
+        if s[i] == "$":
+            cm = CURRENCY.match(s, i)
+            if cm:
+                out.append(cm.group(0))
+                i = cm.end()
+                continue
+            end = _find_inline_math_end(s, i)
+            if end is not None:
+                body = s[i + 1 : end]
+                if body.strip():
+                    out.append(r"\(" + body + r"\)")
+                    i = end + 1
+                    continue
+            out.append("$")
+            i += 1
+            continue
+        out.append(s[i])
+        i += 1
+    return "".join(out)
 
 
 def apply(md):

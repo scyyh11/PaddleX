@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import copy
 import random
 
 import numpy as np
@@ -484,11 +485,38 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
 
         handle_funcs_dict = self._build_handle_funcs_dict(pretty=pretty)
 
-        blocks = [
-            block
-            for block in self["parsing_res_list"]
-            if not getattr(block, "_skip_in_markdown", False)
-        ]
+        ms = self["model_settings"]
+        use_ocr_for_image_block = ms.get("use_ocr_for_image_block", False)
+        use_seal_recognition = ms.get("use_seal_recognition", False)
+        use_chart_recognition = ms.get("use_chart_recognition", False)
+        use_layout_detection = ms.get("use_layout_detection", False)
+        dropped_paths = set(getattr(self, "_dropped_markdown_image_paths", ()))
+
+        blocks = []
+        for block in self["parsing_res_list"]:
+            if getattr(block, "_drop_image_in_markdown", False):
+                if isinstance(block.image, dict) and block.image.get("path"):
+                    dropped_paths.add(block.image["path"])
+                show_ocr = (
+                    (block.label == "image" and use_ocr_for_image_block)
+                    or (
+                        block.label == "chart"
+                        and not use_chart_recognition
+                        and use_ocr_for_image_block
+                    )
+                    or (
+                        block.label == "seal"
+                        and use_layout_detection
+                        and use_seal_recognition
+                    )
+                )
+                if show_ocr and block.content and block.content.strip():
+                    text_block = copy.copy(block)
+                    text_block.image = None
+                    text_block.label = "text"
+                    blocks.append(text_block)
+                continue
+            blocks.append(block)
 
         result = MarkdownConverter.convert(
             blocks,
@@ -496,6 +524,8 @@ class PaddleOCRVLResult(BaseCVResult, HtmlMixin, XlsxMixin, MarkdownMixin, WordM
             show_formula_number=show_formula_number,
             imgs_in_doc=self["imgs_in_doc"],
         )
+        for path in dropped_paths:
+            result["markdown_images"].pop(path, None)
         if (
             markdown_postprocess := getattr(self, "_markdown_postprocess", None)
         ) is not None:

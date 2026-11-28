@@ -1679,11 +1679,11 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
 
 def _mark_figure_noise_blocks(page_results):
-    """Mark tiny/sliver/repeated decorative image blocks to skip in Markdown output."""
+    """Mark tiny/sliver/repeated decorative image blocks so Markdown omits their images."""
     from .doc_postprocess.engine import figure_noise
 
     refs = []
-    blocks = []
+    entries = []
     for page_idx, page_res in enumerate(page_results, 1):
         width = page_res.get("width")
         height = page_res.get("height")
@@ -1710,9 +1710,19 @@ def _mark_figure_noise_blocks(page_results):
                 for v, size in zip(block.bbox, [width, height, width, height])
             ]
             refs.append((page_idx, box))
-            blocks.append(block)
+            entries.append((page_res, block))
+
+    dropped_by_page = {}
     for idx in figure_noise.noise(refs):
-        blocks[idx]._skip_in_markdown = True
+        page_res, block = entries[idx]
+        block._drop_image_in_markdown = True
+        image = getattr(block, "image", None)
+        if isinstance(image, dict) and image.get("path"):
+            dropped_by_page.setdefault(id(page_res), (page_res, set()))[1].add(
+                image["path"]
+            )
+    for page_res, paths in dropped_by_page.values():
+        page_res._dropped_markdown_image_paths = frozenset(paths)
 
 
 def _make_doc_markdown_postprocessor(cfg):
@@ -1762,6 +1772,11 @@ def _concatenate_page_results(page_results):
         markdown_postprocess := getattr(page_results[0], "_markdown_postprocess", None)
     ) is not None:
         concat_res._markdown_postprocess = markdown_postprocess
+    dropped_paths = set().union(
+        *(getattr(res, "_dropped_markdown_image_paths", ()) for res in page_results)
+    )
+    if dropped_paths:
+        concat_res._dropped_markdown_image_paths = frozenset(dropped_paths)
     return concat_res
 
 
