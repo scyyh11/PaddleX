@@ -43,13 +43,17 @@ def _restructure_pages_sync(pipeline: Any, *args: Any, **kwargs: Any) -> List[An
     return list(pipeline.restructure_pages(*args, **kwargs))
 
 
-def _filter_markdown_images(images_map: Any, res_obj: Any) -> Any:
+def _filter_markdown_images(images_map: Any, res_obj: Any, md_text: str = "") -> Any:
     if not images_map:
         return images_map
     dropped = getattr(res_obj, "_dropped_markdown_image_paths", None)
     if not dropped:
         return images_map
-    return {k: v for k, v in images_map.items() if k not in dropped}
+    return {
+        k: v
+        for k, v in images_map.items()
+        if k not in dropped or (md_text and k in md_text)
+    }
 
 
 @function_requires_deps("fastapi")
@@ -238,7 +242,11 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
             layout_parsing_result["markdown"] = dict(
                 text=md_data["markdown_texts"],
                 images=(
-                    _filter_markdown_images(markdown_images, restructured_results[0])
+                    _filter_markdown_images(
+                        markdown_images,
+                        restructured_results[0],
+                        md_data["markdown_texts"],
+                    )
                     if request.returnMarkdownImages
                     else None
                 ),
@@ -270,7 +278,11 @@ def create_pipeline_app(pipeline: Any, app_config: AppConfig) -> "FastAPI":
                 layout_parsing_result["markdown"] = dict(
                     text=md_data["markdown_texts"],
                     images=(
-                        _filter_markdown_images(old_page.markdownImages, new_res)
+                        _filter_markdown_images(
+                            old_page.markdownImages,
+                            new_res,
+                            md_data["markdown_texts"],
+                        )
                         if request.returnMarkdownImages
                         else None
                     ),

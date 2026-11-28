@@ -1818,3 +1818,112 @@ class TestPaddleOCRVLIntegration:
         finally:
             if pipeline._doc_postprocessor is not None:
                 pipeline._doc_postprocessor.close()
+
+    def test_table_embedded_image_not_dropped_from_image_maps(self, tmp_path):
+        from PIL import Image
+
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+        pipeline = object.__new__(_PaddleOCRVLPipeline)
+        pipeline.use_doc_postprocess = True
+        pipeline.doc_postprocess_models_dir = str(dst)
+        pipeline.doc_postprocess_device = "cpu"
+        pipeline._doc_postprocessor = None
+        pipeline._doc_postprocess_warned = False
+
+        table_img_path = "imgs/img_in_image_box_10_10_25_25.jpg"
+        table_img = Image.new("RGB", (15, 15), "red")
+        table_html = (
+            '<table><tr><td><img src="imgs/img_in_image_box_10_10_25_25.jpg" '
+            'alt="Image" /></td><td>Value</td></tr></table>'
+        )
+        noise_blk_p0 = PaddleOCRVLBlock("image", [10, 10, 25, 25], "")
+        noise_blk_p0.image = {"path": table_img_path, "img": table_img}
+
+        pages = [
+            PaddleOCRVLResult(
+                {
+                    "input_path": "table_img.pdf",
+                    "page_index": 0,
+                    "page_count": 2,
+                    "width": 1000,
+                    "height": 1000,
+                    "imgs_in_doc": [{"path": table_img_path, "img": table_img}],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        noise_blk_p0,
+                        PaddleOCRVLBlock("table", [40, 100, 900, 400], table_html),
+                    ],
+                }
+            ),
+            PaddleOCRVLResult(
+                {
+                    "input_path": "table_img.pdf",
+                    "page_index": 1,
+                    "page_count": 2,
+                    "width": 1000,
+                    "height": 1000,
+                    "imgs_in_doc": [{"path": table_img_path, "img": table_img}],
+                    "model_settings": {
+                        "use_doc_preprocessor": False,
+                        "use_layout_detection": False,
+                        "use_chart_recognition": False,
+                    },
+                    "parsing_res_list": [
+                        PaddleOCRVLBlock(
+                            "text", [40, 80, 500, 120], "Second page narrative."
+                        )
+                    ],
+                }
+            ),
+        ]
+
+        app_path = (
+            Path(__file__).resolve().parents[2]
+            / "paddlex"
+            / "inference"
+            / "serving"
+            / "basic_serving"
+            / "_pipeline_apps"
+            / "paddleocr_vl.py"
+        )
+        tree = ast.parse(app_path.read_text(encoding="utf-8"))
+        filter_node = next(
+            n
+            for n in tree.body
+            if isinstance(n, ast.FunctionDef) and n.name == "_filter_markdown_images"
+        )
+        ns = {"Any": object}
+        exec(
+            compile(
+                ast.Module(body=[filter_node], type_ignores=[]), str(app_path), "exec"
+            ),
+            ns,
+        )
+        filter_fn = ns["_filter_markdown_images"]
+
+        try:
+            for concat_flag in (True, False):
+                results = list(
+                    pipeline.restructure_pages(pages, concatenate_pages=concat_flag)
+                )
+                assert table_img_path not in getattr(
+                    results[0], "_dropped_markdown_image_paths", ()
+                )
+                for pretty_flag in (True, False):
+                    md = results[0]._to_markdown(pretty=pretty_flag)
+                    assert table_img_path in md["markdown_texts"]
+                    assert table_img_path in md["markdown_images"]
+                    filtered = filter_fn(
+                        {table_img_path: "b64_table_img"},
+                        results[0],
+                        md["markdown_texts"],
+                    )
+                    assert table_img_path in filtered
+        finally:
+            if pipeline._doc_postprocessor is not None:
+                pipeline._doc_postprocessor.close()

@@ -1726,9 +1726,28 @@ def _mark_figure_noise_blocks(page_results):
         elif path:
             kept_by_page.setdefault(pid, set()).add(path)
     for pid, (page_res, paths) in dropped_by_page.items():
-        effective = paths - kept_by_page.get(pid, set())
+        blocks = page_res.get("parsing_res_list", [])
+        effective = (
+            paths
+            - kept_by_page.get(pid, set())
+            - _paths_referenced_in_blocks(paths, blocks)
+        )
         if effective:
             page_res._dropped_markdown_image_paths = frozenset(effective)
+
+
+def _paths_referenced_in_blocks(paths, blocks):
+    """Return paths from ``paths`` still referenced inside non-dropped block content."""
+    if not paths:
+        return set()
+    active_contents = [
+        getattr(block, "content", None) or ""
+        for block in blocks
+        if not getattr(block, "_drop_image_in_markdown", False)
+    ]
+    return {
+        path for path in paths if any(path in content for content in active_contents)
+    }
 
 
 def _make_doc_markdown_postprocessor(cfg):
@@ -1788,7 +1807,11 @@ def _concatenate_page_results(page_results):
         and isinstance(getattr(blk, "image", None), dict)
         and blk.image.get("path")
     }
-    effective_dropped = dropped_paths - kept_paths
+    effective_dropped = (
+        dropped_paths
+        - kept_paths
+        - _paths_referenced_in_blocks(dropped_paths, all_blocks)
+    )
     if effective_dropped:
         concat_res._dropped_markdown_image_paths = frozenset(effective_dropped)
     return concat_res
