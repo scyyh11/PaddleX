@@ -235,7 +235,7 @@ class _PaddleOCRVLPipeline(BasePipeline):
 
             # Document-level post-processing for multi-page documents (opt-in via pipeline config,
             # enabled for PaddleOCR-VL-1.8 when a model bundle is available).
-        self.use_doc_postprocess = config.get("use_doc_postprocess", None)
+        self.use_doc_postprocess = config.get("use_doc_postprocess", False)
         self.doc_postprocess_models_dir = config.get("doc_postprocess_models_dir", None)
         self.doc_postprocess_device = config.get("doc_postprocess_device", "cpu")
         self._doc_postprocessor = None

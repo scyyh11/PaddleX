@@ -2073,11 +2073,34 @@ class TestPaddleOCRVLIntegration:
         finally:
             proc.close()
 
-    def test_pipeline_init_initializes_doc_postprocess_with_none_default(self):
-        pipeline = _PaddleOCRVLPipeline({}, initial_predictor=False)
-        assert pipeline.use_doc_postprocess is None
-        assert pipeline.doc_postprocess_models_dir is None
+    def test_pipeline_init_defaults_doc_postprocess_to_false_and_18_to_none(
+        self, tmp_path
+    ):
+        src = _create_dummy_joblib_bundle(tmp_path / "src_joblib")
+        dst = bundle.export_portable(src, tmp_path / "dst_portable")
+
+        pipeline = _PaddleOCRVLPipeline(
+            {"doc_postprocess_models_dir": str(dst)}, initial_predictor=False
+        )
+        assert pipeline.use_doc_postprocess is False
         assert pipeline.doc_postprocess_device == "cpu"
         assert pipeline._doc_postprocessor is None
         assert pipeline._doc_postprocess_warned is False
+        assert pipeline._doc_postprocess_ready() is False
         pipeline.close()
+
+        vl18_cfg_path = (
+            Path(__file__).resolve().parents[2]
+            / "paddlex"
+            / "configs"
+            / "pipelines"
+            / "PaddleOCR-VL-1.8.yaml"
+        )
+        vl18_cfg = yaml.safe_load(vl18_cfg_path.read_text(encoding="utf-8"))
+        pipeline_18 = _PaddleOCRVLPipeline(
+            {**vl18_cfg, "doc_postprocess_models_dir": str(dst)},
+            initial_predictor=False,
+        )
+        assert pipeline_18.use_doc_postprocess is None
+        assert pipeline_18._doc_postprocess_ready() is True
+        pipeline_18.close()
